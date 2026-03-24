@@ -12,17 +12,21 @@ function detectPlatform(url) {
     return null;
 }
 
-// Fetch video info from RapidAPI (same approach as social-media-downloader)
+// Fetch video info from RapidAPI "Auto Download All In One" API
+// Free tier: $0.00/mo (1 req/sec limit)
+// Subscribe at: https://rapidapi.com/nguyenmanhict-MuTUtGWD7K/api/auto-download-all-in-one
 function fetchFromRapidAPI(videoUrl) {
     return new Promise((resolve, reject) => {
-        const encodedUrl = encodeURIComponent(videoUrl);
+        const postBody = JSON.stringify({ url: videoUrl });
         const options = {
-            hostname: 'social-media-video-downloader.p.rapidapi.com',
-            path: `/smvd/get/all?url=${encodedUrl}`,
-            method: 'GET',
+            hostname: 'auto-download-all-in-one.p.rapidapi.com',
+            path: '/v1/social/autolink',
+            method: 'POST',
             headers: {
+                'Content-Type': 'application/json',
                 'x-rapidapi-key': process.env.RAPIDAPI_KEY,
-                'x-rapidapi-host': 'social-media-video-downloader.p.rapidapi.com'
+                'x-rapidapi-host': 'auto-download-all-in-one.p.rapidapi.com',
+                'Content-Length': Buffer.byteLength(postBody)
             }
         };
 
@@ -44,26 +48,27 @@ function fetchFromRapidAPI(videoUrl) {
             req.destroy();
             reject(new Error('Request timeout'));
         });
+        req.write(postBody);
         req.end();
     });
 }
 
-// Transform RapidAPI response to match frontend expected format
+// Transform API response to match frontend expected format
+// API returns: { url, source, author, title, thumbnail, duration, medias: [{ url, quality, extension, type }] }
+// Frontend expects: { success, links: [{ url, quality, format }], title, thumbnail, platform }
 function transformResponse(apiData, platform) {
     const links = [];
     const title = apiData.title || '';
-    const thumbnail = apiData.picture || apiData.thumbnail || '';
+    const thumbnail = apiData.thumbnail || '';
 
-    if (apiData.links && Array.isArray(apiData.links)) {
-        apiData.links.forEach((item) => {
-            if (item.link) {
-                const quality = item.quality || item.q || 'Download';
-                const format = item.mimeType
-                    ? (item.mimeType.includes('audio') ? 'mp3' : 'mp4')
-                    : 'mp4';
+    if (apiData.medias && Array.isArray(apiData.medias)) {
+        apiData.medias.forEach((item) => {
+            if (item.url) {
+                const quality = item.quality || 'Download';
+                const format = item.extension || (item.type === 'audio' ? 'mp3' : 'mp4');
 
                 links.push({
-                    url: item.link,
+                    url: item.url,
                     quality: quality,
                     format: format,
                     size: item.size || ''
@@ -119,8 +124,8 @@ module.exports = async function handler(req, res) {
             return res.status(429).json({ success: false, error: 'Too many requests. Please try again later.' });
         }
 
-        if (response.statusCode === 401) {
-            return res.status(401).json({ success: false, error: 'Invalid API key. Please check configuration.' });
+        if (response.statusCode === 401 || response.statusCode === 403) {
+            return res.status(401).json({ success: false, error: 'Invalid API key or not subscribed. Please check configuration.' });
         }
 
         if (response.statusCode !== 200) {
