@@ -410,7 +410,203 @@ async function downloadTwitter(videoUrl) {
     }
 }
 
-// Main handler
+// =============================================
+// FALLBACK 1: Silva API
+// =============================================
+async function downloadViaSilvaAPI(videoUrl) {
+    try {
+        const apiUrl = `https://silva-ap-is.vercel.app/api/tiktok?url=${encodeURIComponent(videoUrl)}&apikey=silva`;
+        const parsed = new URL(apiUrl);
+
+        const response = await makeRequest({
+            hostname: parsed.hostname,
+            path: parsed.pathname + parsed.search,
+            method: 'GET',
+            protocol: 'https:',
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'application/json'
+            }
+        });
+
+        let data;
+        try { data = JSON.parse(response.body); } catch (e) { data = null; }
+
+        if (!data) {
+            return { success: false, error: 'Silva API returned invalid response' };
+        }
+
+        const links = [];
+
+        if (data.result && data.result.download_url) {
+            links.push({ url: data.result.download_url, quality: 'HD (No Watermark)', format: 'mp4' });
+        }
+        if (data.result && data.result.download_url_wm) {
+            links.push({ url: data.result.download_url_wm, quality: 'With Watermark', format: 'mp4' });
+        }
+        if (data.data && data.data.play) {
+            links.push({ url: data.data.play, quality: 'HD Video', format: 'mp4' });
+        }
+        if (data.data && data.data.wmplay) {
+            links.push({ url: data.data.wmplay, quality: 'With Watermark', format: 'mp4' });
+        }
+        if (data.data && data.data.hdplay) {
+            links.push({ url: data.data.hdplay, quality: 'HD Video', format: 'mp4' });
+        }
+        if (data.data && data.data.music) {
+            links.push({ url: data.data.music, quality: 'Audio Only', format: 'mp3' });
+        }
+        if (data.url) {
+            links.push({ url: data.url, quality: 'Download', format: 'mp4' });
+        }
+        if (data.video) {
+            links.push({ url: data.video, quality: 'Video', format: 'mp4' });
+        }
+        if (data.download) {
+            links.push({ url: data.download, quality: 'Download', format: 'mp4' });
+        }
+
+        if (data.links && Array.isArray(data.links)) {
+            data.links.forEach((link, i) => {
+                if (typeof link === 'string') {
+                    links.push({ url: link, quality: `Quality ${i + 1}`, format: 'mp4' });
+                } else if (link.url) {
+                    links.push({
+                        url: link.url,
+                        quality: link.quality || link.q || `Quality ${i + 1}`,
+                        format: link.format || 'mp4'
+                    });
+                }
+            });
+        }
+
+        const title = data.result?.title || data.data?.title || data.title || '';
+        const thumbnail = data.result?.thumbnail || data.data?.cover || data.data?.origin_cover || data.thumbnail || '';
+
+        if (links.length > 0) {
+            return { success: true, links, title, thumbnail };
+        }
+
+        return { success: false, error: 'Silva API: no download links found' };
+    } catch (err) {
+        return { success: false, error: 'Silva API error: ' + err.message };
+    }
+}
+
+// =============================================
+// FALLBACK 2: FastSaver API
+// =============================================
+async function downloadViaFastSaver(videoUrl) {
+    try {
+        const postData = JSON.stringify({ url: videoUrl });
+
+        const response = await makeRequest({
+            hostname: 'api.fastsaverapi.com',
+            path: '/v2/download',
+            method: 'POST',
+            protocol: 'https:',
+            headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(postData),
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'application/json'
+            }
+        }, postData);
+
+        let data;
+        try { data = JSON.parse(response.body); } catch (e) { data = null; }
+
+        if (!data) {
+            return { success: false, error: 'FastSaver API returned invalid response' };
+        }
+
+        const links = [];
+
+        if (data.url) {
+            links.push({
+                url: Array.isArray(data.url) ? data.url[0] : data.url,
+                quality: 'HD Video',
+                format: 'mp4'
+            });
+        }
+
+        if (data.video) {
+            const videos = Array.isArray(data.video) ? data.video : [data.video];
+            videos.forEach((v, i) => {
+                if (typeof v === 'string') {
+                    links.push({ url: v, quality: i === 0 ? 'HD' : 'SD', format: 'mp4' });
+                } else if (v.url) {
+                    links.push({
+                        url: v.url,
+                        quality: v.quality || (i === 0 ? 'HD' : 'SD'),
+                        format: v.format || 'mp4'
+                    });
+                }
+            });
+        }
+
+        if (data.urls && Array.isArray(data.urls)) {
+            data.urls.forEach((item, i) => {
+                if (typeof item === 'string') {
+                    links.push({ url: item, quality: `Quality ${i + 1}`, format: 'mp4' });
+                } else if (item.url) {
+                    links.push({
+                        url: item.url,
+                        quality: item.quality || item.q || `Quality ${i + 1}`,
+                        format: item.ext || item.format || 'mp4',
+                        size: item.size || ''
+                    });
+                }
+            });
+        }
+
+        if (data.medias && Array.isArray(data.medias)) {
+            data.medias.forEach((media, i) => {
+                if (media.url) {
+                    links.push({
+                        url: media.url,
+                        quality: media.quality || media.formattedSize || `Quality ${i + 1}`,
+                        format: media.extension || 'mp4',
+                        size: media.formattedSize || ''
+                    });
+                }
+            });
+        }
+
+        const title = data.title || data.meta?.title || '';
+        const thumbnail = data.thumbnail || data.meta?.thumbnail || data.cover || '';
+
+        if (links.length > 0) {
+            return { success: true, links, title, thumbnail };
+        }
+
+        return { success: false, error: 'FastSaver API: no download links found' };
+    } catch (err) {
+        return { success: false, error: 'FastSaver API error: ' + err.message };
+    }
+}
+
+// =============================================
+// PRIMARY DOWNLOAD - platform-specific scrapers
+// =============================================
+async function downloadPrimary(url, platform) {
+    switch (platform) {
+        case 'facebook':  return downloadFacebook(url);
+        case 'tiktok':    return downloadTiktok(url);
+        case 'youtube':   return downloadYoutube(url);
+        case 'instagram': return downloadInstagram(url);
+        case 'pinterest': return downloadPinterest(url);
+        case 'twitter':   return downloadTwitter(url);
+        default:          return { success: false, error: 'Unsupported platform' };
+    }
+}
+
+// =============================================
+// MAIN HANDLER with fallback chain:
+// 1. Primary scrapers (yt-dlp equivalent)
+// 2. Silva API (fallback)
+// 3. FastSaver API (fallback)
+// =============================================
 module.exports = async function handler(req, res) {
     // CORS headers
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -437,31 +633,44 @@ module.exports = async function handler(req, res) {
         return res.status(400).json({ success: false, error: 'Unsupported platform' });
     }
 
-    let result;
-
-    switch (platform) {
-        case 'facebook':
-            result = await downloadFacebook(url);
-            break;
-        case 'tiktok':
-            result = await downloadTiktok(url);
-            break;
-        case 'youtube':
-            result = await downloadYoutube(url);
-            break;
-        case 'instagram':
-            result = await downloadInstagram(url);
-            break;
-        case 'pinterest':
-            result = await downloadPinterest(url);
-            break;
-        case 'twitter':
-            result = await downloadTwitter(url);
-            break;
-        default:
-            result = { success: false, error: 'Unsupported platform' };
+    // ---- Fallback chain ----
+    // 1. Primary: platform-specific scrapers
+    let result = await downloadPrimary(url, platform);
+    if (result.success) {
+        result.platform = platform;
+        result.source = 'primary';
+        return res.status(200).json(result);
     }
 
-    result.platform = platform;
-    return res.status(result.success ? 200 : 422).json(result);
+    const primaryError = result.error;
+
+    // 2. Fallback: Silva API
+    result = await downloadViaSilvaAPI(url);
+    if (result.success) {
+        result.platform = platform;
+        result.source = 'silva';
+        return res.status(200).json(result);
+    }
+
+    const silvaError = result.error;
+
+    // 3. Fallback: FastSaver API
+    result = await downloadViaFastSaver(url);
+    if (result.success) {
+        result.platform = platform;
+        result.source = 'fastsaver';
+        return res.status(200).json(result);
+    }
+
+    // All methods failed
+    return res.status(422).json({
+        success: false,
+        platform,
+        error: 'All download methods failed. Please try again later.',
+        details: {
+            primary: primaryError,
+            silva: silvaError,
+            fastsaver: result.error
+        }
+    });
 };
