@@ -150,17 +150,22 @@ async function downloadTiktok(videoUrl) {
 
         if (data && data.code === 0 && data.data) {
             const d = data.data;
+            const base = 'https://www.tikwm.com';
             if (d.hdplay) {
-                links.push({ url: d.hdplay, quality: 'HD (No Watermark)', format: 'mp4' });
+                const hdUrl = d.hdplay.startsWith('http') ? d.hdplay : base + d.hdplay;
+                links.push({ url: hdUrl, quality: 'HD (No Watermark)', format: 'mp4' });
             }
             if (d.play) {
-                links.push({ url: d.play, quality: 'No Watermark', format: 'mp4' });
+                const playUrl = d.play.startsWith('http') ? d.play : base + d.play;
+                links.push({ url: playUrl, quality: 'No Watermark', format: 'mp4' });
             }
             if (d.wmplay) {
-                links.push({ url: d.wmplay, quality: 'With Watermark', format: 'mp4' });
+                const wmUrl = d.wmplay.startsWith('http') ? d.wmplay : base + d.wmplay;
+                links.push({ url: wmUrl, quality: 'With Watermark', format: 'mp4' });
             }
             if (d.music) {
-                links.push({ url: d.music, quality: 'Audio Only', format: 'mp3' });
+                const musicUrl = d.music.startsWith('http') ? d.music : base + d.music;
+                links.push({ url: musicUrl, quality: 'Audio Only', format: 'mp3' });
             }
 
             const title = d.title || '';
@@ -301,7 +306,14 @@ async function downloadYoutube(videoUrl) {
                 break;
             }
 
-            if (progressData && progressData.success === 0) {
+            // success:1 with no download_url means conversion failed
+            if (progressData && progressData.success === 1 && !progressData.download_url) {
+                break;
+            }
+
+            // success:0 with progress > 0 means still processing - continue polling
+            // success:0 with progress === 0 and no text means genuine failure
+            if (progressData && progressData.success === 0 && progressData.progress === 0) {
                 break;
             }
         }
@@ -582,7 +594,14 @@ async function downloadViaLoaderTo(videoUrl, platform) {
                 break;
             }
 
-            if (progressData && progressData.success === 0) {
+            // success:1 with no download_url means conversion failed
+            if (progressData && progressData.success === 1 && !progressData.download_url) {
+                return { success: false, error: 'Loader.to: video conversion failed.' };
+            }
+
+            // success:0 with progress > 0 means still processing - continue polling
+            // success:0 with progress === 0 means genuine failure
+            if (progressData && progressData.success === 0 && progressData.progress === 0) {
                 return { success: false, error: 'Loader.to: video conversion failed.' };
             }
         }
