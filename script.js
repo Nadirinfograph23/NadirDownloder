@@ -3,6 +3,171 @@
    Platform detection, icon switching, on-site download
    ============================================ */
 
+// ==================== TRANSLATIONS ====================
+var currentLang = localStorage.getItem('nadir_lang') || 'en';
+
+var TRANSLATIONS = {
+    en: {
+        nav_platforms: 'Platforms',
+        nav_how: 'How it works',
+        subtitle: 'Download videos from social media platforms \u2014 fast, free, and easy',
+        input_placeholder: 'Paste your video link here...',
+        btn_download: 'Download',
+        btn_downloading: 'Downloading...',
+        helper_text: 'Supports: Facebook, TikTok, YouTube, Instagram, Pinterest, X (Twitter)',
+        how_title: 'How it works',
+        step1_title: '1. Copy the Link',
+        step1_desc: 'Copy the video URL from your favorite social media platform',
+        step2_title: '2. Paste it Here',
+        step2_desc: 'Paste the link into the input field above \u2014 platform is auto-detected',
+        step3_title: '3. Download',
+        step3_desc: 'Click the download button and get your video instantly',
+        footer_copy: '\u00A9 2025 NADIR DOWNLOADER. All rights reserved.',
+        footer_dev: '\u062a\u0637\u0648\u064a\u0631 : ',
+        toast_paste_link: 'Please paste a video link first',
+        toast_unsupported: 'Unsupported platform. Try Facebook, TikTok, YouTube, Instagram, Pinterest, or X',
+        toast_extracting: 'Extracting download links from ',
+        toast_ready: 'Download links ready!',
+        toast_failed: 'Failed to extract links',
+        toast_network: 'Connection error',
+        toast_pasted: 'Link pasted!',
+        toast_paste_manual: 'Press Ctrl+V to paste',
+        extracting_video: 'Extracting video...',
+        error_extract: 'Could not extract download links. Please try again.',
+        error_network: 'Network error. Please check your connection and try again.',
+        detected_suffix: ' detected \u2014 ready to download!'
+    },
+    ar: {
+        nav_platforms: '\u0627\u0644\u0645\u0646\u0635\u0627\u062a',
+        nav_how: '\u0643\u064a\u0641 \u064a\u0639\u0645\u0644',
+        subtitle: '\u062d\u0645\u0651\u0644 \u0627\u0644\u0641\u064a\u062f\u064a\u0648\u0647\u0627\u062a \u0645\u0646 \u0645\u0646\u0635\u0627\u062a \u0627\u0644\u062a\u0648\u0627\u0635\u0644 \u0627\u0644\u0627\u062c\u062a\u0645\u0627\u0639\u064a \u2014 \u0628\u0633\u0631\u0639\u0629\u060c \u0645\u062c\u0627\u0646\u0627\u064b \u0648 \u0628\u0633\u0647\u0648\u0644\u0629',
+        input_placeholder: '\u0627\u0644\u0635\u0642 \u0631\u0627\u0628\u0637 \u0627\u0644\u0641\u064a\u062f\u064a\u0648 \u0647\u0646\u0627...',
+        btn_download: '\u062a\u062d\u0645\u064a\u0644',
+        btn_downloading: '\u062c\u0627\u0631\u064a \u0627\u0644\u062a\u062d\u0645\u064a\u0644...',
+        helper_text: '\u064a\u062f\u0639\u0645: Facebook, TikTok, YouTube, Instagram, Pinterest, X (Twitter)',
+        how_title: '\u0643\u064a\u0641 \u064a\u0639\u0645\u0644',
+        step1_title: '1. \u0627\u0646\u0633\u062e \u0627\u0644\u0631\u0627\u0628\u0637',
+        step1_desc: '\u0627\u0646\u0633\u062e \u0631\u0627\u0628\u0637 \u0627\u0644\u0641\u064a\u062f\u064a\u0648 \u0645\u0646 \u0645\u0646\u0635\u0629 \u0627\u0644\u062a\u0648\u0627\u0635\u0644 \u0627\u0644\u0627\u062c\u062a\u0645\u0627\u0639\u064a \u0627\u0644\u0645\u0641\u0636\u0644\u0629 \u0644\u062f\u064a\u0643',
+        step2_title: '2. \u0627\u0644\u0635\u0642\u0647 \u0647\u0646\u0627',
+        step2_desc: '\u0627\u0644\u0635\u0642 \u0627\u0644\u0631\u0627\u0628\u0637 \u0641\u064a \u062d\u0642\u0644 \u0627\u0644\u0625\u062f\u062e\u0627\u0644 \u0623\u0639\u0644\u0627\u0647 \u2014 \u064a\u062a\u0645 \u0627\u0644\u0643\u0634\u0641 \u0639\u0646 \u0627\u0644\u0645\u0646\u0635\u0629 \u062a\u0644\u0642\u0627\u0626\u064a\u0627\u064b',
+        step3_title: '3. \u062d\u0645\u0651\u0644',
+        step3_desc: '\u0627\u0636\u063a\u0637 \u0639\u0644\u0649 \u0632\u0631 \u0627\u0644\u062a\u062d\u0645\u064a\u0644 \u0648\u0627\u062d\u0635\u0644 \u0639\u0644\u0649 \u0627\u0644\u0641\u064a\u062f\u064a\u0648 \u0641\u0648\u0631\u0627\u064b',
+        footer_copy: '\u00A9 2025 NADIR DOWNLOADER. \u062c\u0645\u064a\u0639 \u0627\u0644\u062d\u0642\u0648\u0642 \u0645\u062d\u0641\u0648\u0638\u0629.',
+        footer_dev: '\u062a\u0637\u0648\u064a\u0631 : ',
+        toast_paste_link: '\u0627\u0644\u0631\u062c\u0627\u0621 \u0644\u0635\u0642 \u0631\u0627\u0628\u0637 \u0627\u0644\u0641\u064a\u062f\u064a\u0648 \u0623\u0648\u0644\u0627\u064b',
+        toast_unsupported: '\u0645\u0646\u0635\u0629 \u063a\u064a\u0631 \u0645\u062f\u0639\u0648\u0645\u0629. \u062c\u0631\u0628 Facebook, TikTok, YouTube, Instagram, Pinterest, \u0623\u0648 X',
+        toast_extracting: '\u062c\u0627\u0631\u064a \u0627\u0633\u062a\u062e\u0631\u0627\u062c \u0631\u0648\u0627\u0628\u0637 \u0627\u0644\u062a\u062d\u0645\u064a\u0644 \u0645\u0646 ',
+        toast_ready: '\u0631\u0648\u0627\u0628\u0637 \u0627\u0644\u062a\u062d\u0645\u064a\u0644 \u062c\u0627\u0647\u0632\u0629!',
+        toast_failed: '\u0641\u0634\u0644 \u0641\u064a \u0627\u0633\u062a\u062e\u0631\u0627\u062c \u0627\u0644\u0631\u0648\u0627\u0628\u0637',
+        toast_network: '\u062e\u0637\u0623 \u0641\u064a \u0627\u0644\u0627\u062a\u0635\u0627\u0644',
+        toast_pasted: '\u062a\u0645 \u0644\u0635\u0642 \u0627\u0644\u0631\u0627\u0628\u0637!',
+        toast_paste_manual: '\u0627\u0636\u063a\u0637 Ctrl+V \u0644\u0644\u0635\u0642',
+        extracting_video: '\u062c\u0627\u0631\u064a \u0627\u0633\u062a\u062e\u0631\u0627\u062c \u0627\u0644\u0641\u064a\u062f\u064a\u0648...',
+        error_extract: '\u062a\u0639\u0630\u0631 \u0627\u0633\u062a\u062e\u0631\u0627\u062c \u0631\u0648\u0627\u0628\u0637 \u0627\u0644\u062a\u062d\u0645\u064a\u0644. \u062d\u0627\u0648\u0644 \u0645\u0631\u0629 \u0623\u062e\u0631\u0649.',
+        error_network: '\u062e\u0637\u0623 \u0641\u064a \u0627\u0644\u0634\u0628\u0643\u0629. \u062a\u062d\u0642\u0642 \u0645\u0646 \u0627\u062a\u0635\u0627\u0644\u0643 \u0648\u062d\u0627\u0648\u0644 \u0645\u0631\u0629 \u0623\u062e\u0631\u0649.',
+        detected_suffix: ' \u062a\u0645 \u0627\u0644\u0643\u0634\u0641 \u2014 \u062c\u0627\u0647\u0632 \u0644\u0644\u062a\u062d\u0645\u064a\u0644!'
+    },
+    fr: {
+        nav_platforms: 'Plateformes',
+        nav_how: 'Comment \u00e7a marche',
+        subtitle: 'T\u00e9l\u00e9chargez des vid\u00e9os depuis les r\u00e9seaux sociaux \u2014 rapide, gratuit et facile',
+        input_placeholder: 'Collez le lien de la vid\u00e9o ici...',
+        btn_download: 'T\u00e9l\u00e9charger',
+        btn_downloading: 'T\u00e9l\u00e9chargement...',
+        helper_text: 'Supporte : Facebook, TikTok, YouTube, Instagram, Pinterest, X (Twitter)',
+        how_title: 'Comment \u00e7a marche',
+        step1_title: '1. Copiez le lien',
+        step1_desc: 'Copiez l\u2019URL de la vid\u00e9o depuis votre r\u00e9seau social pr\u00e9f\u00e9r\u00e9',
+        step2_title: '2. Collez-le ici',
+        step2_desc: 'Collez le lien dans le champ ci-dessus \u2014 la plateforme est d\u00e9tect\u00e9e automatiquement',
+        step3_title: '3. T\u00e9l\u00e9chargez',
+        step3_desc: 'Cliquez sur le bouton de t\u00e9l\u00e9chargement et obtenez votre vid\u00e9o instantan\u00e9ment',
+        footer_copy: '\u00A9 2025 NADIR DOWNLOADER. Tous droits r\u00e9serv\u00e9s.',
+        footer_dev: 'D\u00e9veloppement : ',
+        toast_paste_link: 'Veuillez d\u2019abord coller un lien vid\u00e9o',
+        toast_unsupported: 'Plateforme non support\u00e9e. Essayez Facebook, TikTok, YouTube, Instagram, Pinterest ou X',
+        toast_extracting: 'Extraction des liens depuis ',
+        toast_ready: 'Liens de t\u00e9l\u00e9chargement pr\u00eats !',
+        toast_failed: '\u00c9chec de l\u2019extraction des liens',
+        toast_network: 'Erreur de connexion',
+        toast_pasted: 'Lien coll\u00e9 !',
+        toast_paste_manual: 'Appuyez sur Ctrl+V pour coller',
+        extracting_video: 'Extraction de la vid\u00e9o...',
+        error_extract: 'Impossible d\u2019extraire les liens. Veuillez r\u00e9essayer.',
+        error_network: 'Erreur r\u00e9seau. V\u00e9rifiez votre connexion et r\u00e9essayez.',
+        detected_suffix: ' d\u00e9tect\u00e9 \u2014 pr\u00eat \u00e0 t\u00e9l\u00e9charger !'
+    }
+};
+
+function t(key) {
+    return (TRANSLATIONS[currentLang] && TRANSLATIONS[currentLang][key]) || TRANSLATIONS.en[key] || key;
+}
+
+function applyLanguage(lang) {
+    currentLang = lang;
+    localStorage.setItem('nadir_lang', lang);
+
+    var htmlRoot = document.getElementById('htmlRoot');
+    if (lang === 'ar') {
+        htmlRoot.setAttribute('dir', 'rtl');
+        htmlRoot.setAttribute('lang', 'ar');
+    } else {
+        htmlRoot.setAttribute('dir', 'ltr');
+        htmlRoot.setAttribute('lang', lang);
+    }
+
+    // Translate all data-i18n elements
+    document.querySelectorAll('[data-i18n]').forEach(function(el) {
+        var key = el.getAttribute('data-i18n');
+        el.textContent = t(key);
+    });
+
+    // Translate placeholders
+    document.querySelectorAll('[data-i18n-placeholder]').forEach(function(el) {
+        var key = el.getAttribute('data-i18n-placeholder');
+        el.placeholder = t(key);
+    });
+
+    // Update active lang option
+    document.querySelectorAll('.lang-option').forEach(function(opt) {
+        opt.classList.remove('active');
+        if (opt.dataset.lang === lang) {
+            opt.classList.add('active');
+        }
+    });
+
+    // Update helper text if no platform is detected
+    if (!currentPlatform) {
+        helperText.textContent = t('helper_text');
+        helperText.style.color = '';
+    }
+}
+
+function setupLanguageSwitcher() {
+    var langBtn = document.getElementById('langBtn');
+    var langDropdown = document.getElementById('langDropdown');
+    if (!langBtn || !langDropdown) return;
+
+    langBtn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        langDropdown.classList.toggle('show');
+    });
+
+    document.querySelectorAll('.lang-option').forEach(function(opt) {
+        opt.addEventListener('click', function(e) {
+            e.stopPropagation();
+            var lang = this.dataset.lang;
+            applyLanguage(lang);
+            langDropdown.classList.remove('show');
+        });
+    });
+
+    // Close dropdown when clicking outside
+    document.addEventListener('click', function() {
+        langDropdown.classList.remove('show');
+    });
+}
+
 // Platform configuration
 const PLATFORMS = {
     facebook: {
@@ -121,7 +286,7 @@ function updatePlatformUI(platformKey) {
         inputIcon.style.color = platform.color;
         
         // Update helper text
-        helperText.innerHTML = '<i class="' + platform.icon + '" style="color:' + platform.color + '"></i> ' + platform.name + ' detected — ready to download!';
+        helperText.innerHTML = '<i class="' + platform.icon + '" style="color:' + platform.color + '"></i> ' + platform.name + t('detected_suffix');
         helperText.style.color = platform.color;
         
         // Update download button
@@ -155,7 +320,7 @@ function updatePlatformUI(platformKey) {
         inputIcon.innerHTML = '<i class="fas fa-link"></i>';
         inputIcon.style.color = '';
         
-        helperText.textContent = 'Supports: Facebook, TikTok, YouTube, Instagram, Pinterest, X (Twitter)';
+        helperText.textContent = t('helper_text');
         helperText.style.color = '';
         
         downloadBtn.style.background = '';
@@ -194,11 +359,11 @@ function showToast(message, icon) {
 function setLoading(loading) {
     isDownloading = loading;
     if (loading) {
-        downloadBtn.innerHTML = '<span class="btn-text">Downloading...</span> <i class="fas fa-spinner fa-spin btn-icon"></i>';
+        downloadBtn.innerHTML = '<span class="btn-text">' + t('btn_downloading') + '</span> <i class="fas fa-spinner fa-spin btn-icon"></i>';
         downloadBtn.disabled = true;
         downloadBtn.style.opacity = '0.7';
     } else {
-        downloadBtn.innerHTML = '<span class="btn-text">Download</span> <i class="fas fa-arrow-down btn-icon"></i>';
+        downloadBtn.innerHTML = '<span class="btn-text">' + t('btn_download') + '</span> <i class="fas fa-arrow-down btn-icon"></i>';
         downloadBtn.disabled = false;
         downloadBtn.style.opacity = '1';
     }
@@ -273,7 +438,7 @@ function showPreviewLoading(platform) {
     previewPlatformIcon.className = platformInfo.icon;
     previewPlatformIcon.style.color = platformInfo.color;
     previewPlatformName.textContent = platformInfo.name;
-    previewThumbnail.innerHTML = '<div class="preview-loading"><i class="fas fa-spinner fa-spin"></i><span>Extracting video...</span></div>';
+    previewThumbnail.innerHTML = '<div class="preview-loading"><i class="fas fa-spinner fa-spin"></i><span>' + t('extracting_video') + '</span></div>';
     previewTitleText.textContent = '';
     previewTitleText.style.display = 'none';
     previewDownloads.innerHTML = '';
@@ -294,7 +459,7 @@ async function handleDownload() {
     var url = urlInput.value.trim();
     
     if (!url) {
-        showToast('Please paste a video link first', 'fas fa-exclamation-triangle');
+        showToast(t('toast_paste_link'), 'fas fa-exclamation-triangle');
         urlInput.focus();
         return;
     }
@@ -302,7 +467,7 @@ async function handleDownload() {
     var platform = detectPlatform(url);
     
     if (!platform) {
-        showToast('Unsupported platform. Try Facebook, TikTok, YouTube, Instagram, Pinterest, or X', 'fas fa-exclamation-circle');
+        showToast(t('toast_unsupported'), 'fas fa-exclamation-circle');
         return;
     }
 
@@ -310,7 +475,7 @@ async function handleDownload() {
     
     setLoading(true);
     showPreviewLoading(platform);
-    showToast('Extracting download links from ' + PLATFORMS[platform].name + '...', PLATFORMS[platform].icon);
+    showToast(t('toast_extracting') + PLATFORMS[platform].name + '...', PLATFORMS[platform].icon);
 
     try {
         var response = await fetch('/api/download', {
@@ -323,14 +488,14 @@ async function handleDownload() {
 
         if (data.success && data.links && data.links.length > 0) {
             showResults(data, platform);
-            showToast('Download links ready!', 'fas fa-check');
+            showToast(t('toast_ready'), 'fas fa-check');
         } else {
-            showError(data.error || 'Could not extract download links. Please try again.');
-            showToast('Failed to extract links', 'fas fa-exclamation-circle');
+            showError(data.error || t('error_extract'));
+            showToast(t('toast_failed'), 'fas fa-exclamation-circle');
         }
     } catch (err) {
-        showError('Network error. Please check your connection and try again.');
-        showToast('Connection error', 'fas fa-wifi');
+        showError(t('error_network'));
+        showToast(t('toast_network'), 'fas fa-wifi');
     } finally {
         setLoading(false);
     }
@@ -343,12 +508,12 @@ async function handlePaste() {
         if (text) {
             urlInput.value = text;
             urlInput.dispatchEvent(new Event('input'));
-            showToast('Link pasted!', 'fas fa-check');
+            showToast(t('toast_pasted'), 'fas fa-check');
         }
     } catch (err) {
         // Fallback: focus input for manual paste
         urlInput.focus();
-        showToast('Press Ctrl+V to paste', 'fas fa-keyboard');
+        showToast(t('toast_paste_manual'), 'fas fa-keyboard');
     }
 }
 
@@ -463,5 +628,7 @@ document.addEventListener('DOMContentLoaded', function() {
     createParticles();
     setupDeveloperLink();
     setupFacebookNavIcon();
+    setupLanguageSwitcher();
+    applyLanguage(currentLang);
     urlInput.focus();
 });

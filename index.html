@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" dir="ltr">
+<html lang="en" dir="ltr" id="htmlRoot">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -24,8 +24,27 @@
             </a>
         </div>
         <div class="nav-links">
-            <a href="#platforms" class="nav-link">Platforms</a>
-            <a href="#how-it-works" class="nav-link">How it works</a>
+            <a href="#platforms" class="nav-link" data-i18n="nav_platforms">Platforms</a>
+            <a href="#how-it-works" class="nav-link" data-i18n="nav_how">How it works</a>
+        </div>
+        <div class="lang-switcher" id="langSwitcher">
+            <button class="lang-btn" id="langBtn" title="Language">
+                <i class="fas fa-globe"></i>
+            </button>
+            <div class="lang-dropdown" id="langDropdown">
+                <button class="lang-option" data-lang="ar">
+                    <span class="flag-emoji">&#127465;&#127487;</span>
+                    <span>العربية</span>
+                </button>
+                <button class="lang-option" data-lang="fr">
+                    <span class="flag-emoji">&#127467;&#127479;</span>
+                    <span>Français</span>
+                </button>
+                <button class="lang-option active" data-lang="en">
+                    <span class="flag-emoji">&#127468;&#127463;</span>
+                    <span>English</span>
+                </button>
+            </div>
         </div>
     </nav>
 
@@ -43,7 +62,7 @@
 
         <!-- Title -->
         <h1 class="main-title">NADIR DOWNLOADER</h1>
-        <p class="subtitle">Download videos from social media platforms — fast, free, and easy</p>
+        <p class="subtitle" data-i18n="subtitle">Download videos from social media platforms — fast, free, and easy</p>
 
         <!-- Download Input Section -->
         <div class="download-section">
@@ -56,6 +75,7 @@
                     id="urlInput" 
                     class="url-input" 
                     placeholder="Paste your video link here..."
+                    data-i18n-placeholder="input_placeholder"
                     autocomplete="off"
                     dir="ltr"
                 >
@@ -63,11 +83,11 @@
                     <i class="fas fa-paste"></i>
                 </button>
                 <button class="download-btn" id="downloadBtn">
-                    <span class="btn-text">Download</span>
+                    <span class="btn-text" data-i18n="btn_download">Download</span>
                     <i class="fas fa-arrow-down btn-icon"></i>
                 </button>
             </div>
-            <p class="helper-text" id="helperText">Supports: Facebook, TikTok, YouTube, Instagram, Pinterest, X (Twitter)</p>
+            <p class="helper-text" id="helperText" data-i18n="helper_text">Supports: Facebook, TikTok, YouTube, Instagram, Pinterest, X (Twitter)</p>
         </div>
 
         <!-- Platform badges -->
@@ -122,37 +142,37 @@
 
     <!-- How it Works Section -->
     <section class="how-it-works" id="how-it-works">
-        <h2 class="section-title">How it works</h2>
+        <h2 class="section-title" data-i18n="how_title">How it works</h2>
         <div class="steps">
             <div class="step">
                 <div class="step-icon">
                     <i class="fas fa-copy"></i>
                 </div>
-                <h3>1. Copy the Link</h3>
-                <p>Copy the video URL from your favorite social media platform</p>
+                <h3 data-i18n="step1_title">1. Copy the Link</h3>
+                <p data-i18n="step1_desc">Copy the video URL from your favorite social media platform</p>
             </div>
             <div class="step">
                 <div class="step-icon">
                     <i class="fas fa-paste"></i>
                 </div>
-                <h3>2. Paste it Here</h3>
-                <p>Paste the link into the input field above — platform is auto-detected</p>
+                <h3 data-i18n="step2_title">2. Paste it Here</h3>
+                <p data-i18n="step2_desc">Paste the link into the input field above — platform is auto-detected</p>
             </div>
             <div class="step">
                 <div class="step-icon">
                     <i class="fas fa-download"></i>
                 </div>
-                <h3>3. Download</h3>
-                <p>Click the download button and get your video instantly</p>
+                <h3 data-i18n="step3_title">3. Download</h3>
+                <p data-i18n="step3_desc">Click the download button and get your video instantly</p>
             </div>
         </div>
     </section>
 
     <!-- Footer -->
     <footer class="footer">
-        <p>&copy; 2025 NADIR DOWNLOADER. All rights reserved.</p>
+        <p data-i18n="footer_copy">&copy; 2025 NADIR DOWNLOADER. All rights reserved.</p>
         <p class="developer-credit">
-            <span>تطوير : </span>
+            <span data-i18n="footer_dev">تطوير : </span>
             <a href="https://www.facebook.com/nadir.infograph23" class="developer-link" id="developerLink" target="_blank" rel="noopener noreferrer">
                 <i class="fab fa-facebook-f"></i>
                 نذير حوامرية - NADIR INFOGRAPH
