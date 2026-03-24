@@ -570,6 +570,34 @@ body {
     font-size: 13px;
 }
 
+/* Developer Credit */
+.developer-credit {
+    margin-top: 12px;
+    font-size: 14px;
+    color: var(--text-secondary);
+    direction: rtl;
+}
+
+.developer-link {
+    color: var(--accent);
+    text-decoration: none;
+    font-weight: 600;
+    transition: all var(--transition);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.developer-link:hover {
+    color: #1877f2;
+    text-decoration: underline;
+}
+
+.developer-link i {
+    font-size: 14px;
+    color: #1877f2;
+}
+
 /* Animations */
 @keyframes icon-switch {
     0% { transform: scale(1) rotate(0deg); }

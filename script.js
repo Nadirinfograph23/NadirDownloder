@@ -281,8 +281,42 @@ function createParticles() {
     }
 }
 
+// Developer link - open Facebook app on mobile, web on desktop
+function setupDeveloperLink() {
+    var developerLink = document.getElementById('developerLink');
+    if (!developerLink) return;
+    
+    developerLink.addEventListener('click', function(e) {
+        var isMobile = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        
+        if (isMobile) {
+            e.preventDefault();
+            // Try to open Facebook app first, fallback to web
+            var fbAppUrl = 'fb://profile/nadir.infograph23';
+            var fbWebUrl = 'https://www.facebook.com/nadir.infograph23';
+            
+            var appOpened = false;
+            var timeout = setTimeout(function() {
+                if (!appOpened) {
+                    window.open(fbWebUrl, '_blank');
+                }
+            }, 1500);
+            
+            window.location.href = fbAppUrl;
+            
+            window.addEventListener('blur', function onBlur() {
+                appOpened = true;
+                clearTimeout(timeout);
+                window.removeEventListener('blur', onBlur);
+            });
+        }
+        // On desktop, the default <a> tag behavior opens the web URL in a new tab
+    });
+}
+
 // Initialize
 document.addEventListener('DOMContentLoaded', function() {
     createParticles();
+    setupDeveloperLink();
     urlInput.focus();
 });
