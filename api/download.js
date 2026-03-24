@@ -1,6 +1,4 @@
 const https = require('https');
-const http = require('http');
-const { URL } = require('url');
 
 // Platform detection
 function detectPlatform(url) {
@@ -14,400 +12,73 @@ function detectPlatform(url) {
     return null;
 }
 
-// Make HTTP request helper
-function makeRequest(options, postData) {
+// Fetch video info from RapidAPI (same approach as social-media-downloader)
+function fetchFromRapidAPI(videoUrl) {
     return new Promise((resolve, reject) => {
-        const protocol = options.protocol === 'http:' ? http : https;
-        const req = protocol.request(options, (res) => {
-            let data = '';
-            // Handle redirects
-            if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-                const redirectUrl = new URL(res.headers.location, `${options.protocol}//${options.hostname}`);
-                const newOptions = {
-                    hostname: redirectUrl.hostname,
-                    port: redirectUrl.port,
-                    path: redirectUrl.pathname + redirectUrl.search,
-                    method: options.method,
-                    headers: options.headers,
-                    protocol: redirectUrl.protocol
-                };
-                return resolve(makeRequest(newOptions, postData));
+        const encodedUrl = encodeURIComponent(videoUrl);
+        const options = {
+            hostname: 'social-media-video-downloader.p.rapidapi.com',
+            path: `/smvd/get/all?url=${encodedUrl}`,
+            method: 'GET',
+            headers: {
+                'x-rapidapi-key': process.env.RAPIDAPI_KEY,
+                'x-rapidapi-host': 'social-media-video-downloader.p.rapidapi.com'
             }
+        };
+
+        const req = https.request(options, (res) => {
+            let data = '';
             res.on('data', (chunk) => { data += chunk; });
-            res.on('end', () => resolve({ statusCode: res.statusCode, headers: res.headers, body: data }));
+            res.on('end', () => {
+                try {
+                    const parsed = JSON.parse(data);
+                    resolve({ statusCode: res.statusCode, data: parsed });
+                } catch (e) {
+                    reject(new Error('Failed to parse API response'));
+                }
+            });
         });
+
         req.on('error', reject);
-        req.setTimeout(15000, () => { req.destroy(); reject(new Error('Request timeout')); });
-        if (postData) req.write(postData);
+        req.setTimeout(30000, () => {
+            req.destroy();
+            reject(new Error('Request timeout'));
+        });
         req.end();
     });
 }
 
-// Facebook downloader via snapsave
-async function downloadFacebook(videoUrl) {
-    try {
-        const postData = `url=${encodeURIComponent(videoUrl)}`;
-        const response = await makeRequest({
-            hostname: 'snapsave.app',
-            path: '/action.php?lang=fr',
-            method: 'POST',
-            protocol: 'https:',
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Content-Length': Buffer.byteLength(postData),
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Referer': 'https://snapsave.app/fr',
-                'Origin': 'https://snapsave.app'
-            }
-        }, postData);
+// Transform RapidAPI response to match frontend expected format
+function transformResponse(apiData, platform) {
+    const links = [];
+    const title = apiData.title || '';
+    const thumbnail = apiData.picture || apiData.thumbnail || '';
 
-        const body = response.body;
-        const links = [];
+    if (apiData.links && Array.isArray(apiData.links)) {
+        apiData.links.forEach((item) => {
+            if (item.link) {
+                const quality = item.quality || item.q || 'Download';
+                const format = item.mimeType
+                    ? (item.mimeType.includes('audio') ? 'mp3' : 'mp4')
+                    : 'mp4';
 
-        // Try to extract download links from response
-        const hdMatch = body.match(/href="(https?:\/\/[^"]*)"[^>]*>.*?HD/gi);
-        const sdMatch = body.match(/href="(https?:\/\/[^"]*)"[^>]*>.*?SD/gi);
-        const urlMatches = body.match(/https?:\/\/[^\s"'<>]+\.mp4[^\s"'<>]*/gi);
-
-        if (urlMatches) {
-            const unique = [...new Set(urlMatches)];
-            unique.forEach((url, i) => {
-                links.push({ url: url, quality: i === 0 ? 'HD' : 'SD', format: 'mp4' });
-            });
-        }
-
-        if (links.length > 0) return { success: true, links };
-
-        // Try decoding encoded response
-        const encodedMatch = body.match(/decodeURIComponent\(escape\(atob\("([^"]+)"\)\)\)/);
-        if (encodedMatch) {
-            const decoded = Buffer.from(encodedMatch[1], 'base64').toString();
-            const decodedUrls = decoded.match(/https?:\/\/[^\s"'<>]+\.mp4[^\s"'<>]*/gi);
-            if (decodedUrls) {
-                const unique = [...new Set(decodedUrls)];
-                unique.forEach((url, i) => {
-                    links.push({ url: url, quality: i === 0 ? 'HD' : 'SD', format: 'mp4' });
+                links.push({
+                    url: item.link,
+                    quality: quality,
+                    format: format,
+                    size: item.size || ''
                 });
-                return { success: true, links };
-            }
-        }
-
-        return { success: false, error: 'Could not extract download links. The video may be private or unavailable.' };
-    } catch (err) {
-        return { success: false, error: 'Facebook download service error: ' + err.message };
-    }
-}
-
-// TikTok downloader via snaptik
-async function downloadTiktok(videoUrl) {
-    try {
-        // First get the page to extract token
-        const pageResponse = await makeRequest({
-            hostname: 'snaptik.app',
-            path: '/fr2',
-            method: 'GET',
-            protocol: 'https:',
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             }
         });
-
-        const tokenMatch = pageResponse.body.match(/name="token"\s+value="([^"]+)"/);
-        const token = tokenMatch ? tokenMatch[1] : '';
-
-        const postData = `url=${encodeURIComponent(videoUrl)}&token=${encodeURIComponent(token)}`;
-        const response = await makeRequest({
-            hostname: 'snaptik.app',
-            path: '/abc2.php',
-            method: 'POST',
-            protocol: 'https:',
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Content-Length': Buffer.byteLength(postData),
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Referer': 'https://snaptik.app/fr2',
-                'Origin': 'https://snaptik.app'
-            }
-        }, postData);
-
-        const body = response.body;
-        const links = [];
-
-        const urlMatches = body.match(/https?:\/\/[^\s"'<>\\]+\.mp4[^\s"'<>\\]*/gi);
-        if (urlMatches) {
-            const unique = [...new Set(urlMatches)];
-            unique.forEach((url, i) => {
-                links.push({ url: url, quality: i === 0 ? 'No Watermark' : 'With Watermark', format: 'mp4' });
-            });
-        }
-
-        // Also try to find download links in decoded content
-        const encodedMatches = body.match(/atob\("([^"]+)"\)/g);
-        if (encodedMatches) {
-            encodedMatches.forEach(match => {
-                const b64 = match.match(/atob\("([^"]+)"\)/);
-                if (b64) {
-                    try {
-                        const decoded = Buffer.from(b64[1], 'base64').toString();
-                        const decodedUrls = decoded.match(/https?:\/\/[^\s"'<>]+\.mp4[^\s"'<>]*/gi);
-                        if (decodedUrls) {
-                            decodedUrls.forEach(url => {
-                                if (!links.find(l => l.url === url)) {
-                                    links.push({ url: url, quality: 'Video', format: 'mp4' });
-                                }
-                            });
-                        }
-                    } catch (e) {}
-                }
-            });
-        }
-
-        if (links.length > 0) return { success: true, links };
-        return { success: false, error: 'Could not extract TikTok download links. The video may be private.' };
-    } catch (err) {
-        return { success: false, error: 'TikTok download service error: ' + err.message };
     }
-}
 
-// YouTube downloader via snapany
-async function downloadYoutube(videoUrl) {
-    try {
-        const postData = `url=${encodeURIComponent(videoUrl)}`;
-        const response = await makeRequest({
-            hostname: 'snapany.com',
-            path: '/api/ajaxSearch',
-            method: 'POST',
-            protocol: 'https:',
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Content-Length': Buffer.byteLength(postData),
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Referer': 'https://snapany.com/fr/youtube-1',
-                'Origin': 'https://snapany.com'
-            }
-        }, postData);
-
-        const body = response.body;
-        let data;
-        try { data = JSON.parse(body); } catch (e) { data = null; }
-
-        const links = [];
-
-        if (data && data.links) {
-            // Process video links
-            if (data.links.mp4) {
-                Object.values(data.links.mp4).forEach(item => {
-                    if (item.url || item.k) {
-                        links.push({
-                            url: item.url || item.k,
-                            quality: item.q || item.quality || 'Video',
-                            format: 'mp4',
-                            size: item.size || ''
-                        });
-                    }
-                });
-            }
-            // Process audio links
-            if (data.links.mp3) {
-                Object.values(data.links.mp3).forEach(item => {
-                    if (item.url || item.k) {
-                        links.push({
-                            url: item.url || item.k,
-                            quality: item.q || item.quality || 'Audio',
-                            format: 'mp3',
-                            size: item.size || ''
-                        });
-                    }
-                });
-            }
-        }
-
-        // Fallback: extract from HTML response
-        if (links.length === 0) {
-            const urlMatches = body.match(/https?:\/\/[^\s"'<>]+\.(mp4|webm|m4a)[^\s"'<>]*/gi);
-            if (urlMatches) {
-                const unique = [...new Set(urlMatches)];
-                unique.forEach((url, i) => {
-                    const ext = url.match(/\.(mp4|webm|m4a)/i);
-                    links.push({ url: url, quality: `Quality ${i + 1}`, format: ext ? ext[1] : 'mp4' });
-                });
-            }
-        }
-
-        if (links.length > 0) return { success: true, links, title: data?.title || '' };
-        return { success: false, error: 'Could not extract YouTube download links.' };
-    } catch (err) {
-        return { success: false, error: 'YouTube download service error: ' + err.message };
-    }
-}
-
-// Instagram downloader via snapinsta
-async function downloadInstagram(videoUrl) {
-    try {
-        const postData = `url=${encodeURIComponent(videoUrl)}`;
-        const response = await makeRequest({
-            hostname: 'snapinsta.to',
-            path: '/api/ajaxSearch',
-            method: 'POST',
-            protocol: 'https:',
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Content-Length': Buffer.byteLength(postData),
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Referer': 'https://snapinsta.to/fr',
-                'Origin': 'https://snapinsta.to'
-            }
-        }, postData);
-
-        const body = response.body;
-        const links = [];
-        let data;
-        try { data = JSON.parse(body); } catch (e) { data = null; }
-
-        // Try JSON response
-        if (data && data.links) {
-            Object.values(data.links).forEach(item => {
-                if (item.url) {
-                    links.push({ url: item.url, quality: item.q || 'Download', format: 'mp4' });
-                }
-            });
-        }
-
-        // Try extracting from HTML in response
-        if (links.length === 0) {
-            const html = data?.data || body;
-            const hrefMatches = html.match(/href="(https?:\/\/[^"]+)"/gi);
-            if (hrefMatches) {
-                hrefMatches.forEach((match, i) => {
-                    const url = match.match(/href="([^"]+)"/)[1];
-                    if (url.includes('instagram') || url.includes('cdninstagram') || url.includes('.mp4') || url.includes('.jpg')) {
-                        links.push({ url: url, quality: `Download ${i + 1}`, format: url.includes('.mp4') ? 'mp4' : 'jpg' });
-                    }
-                });
-            }
-
-            const urlMatches = html.match(/https?:\/\/[^\s"'<>]*(?:instagram|cdninstagram|fbcdn)[^\s"'<>]*/gi);
-            if (urlMatches && links.length === 0) {
-                const unique = [...new Set(urlMatches)];
-                unique.forEach((url, i) => {
-                    links.push({ url: url, quality: `Download ${i + 1}`, format: url.includes('.mp4') ? 'mp4' : 'jpg' });
-                });
-            }
-        }
-
-        if (links.length > 0) return { success: true, links };
-        return { success: false, error: 'Could not extract Instagram download links. The post may be private.' };
-    } catch (err) {
-        return { success: false, error: 'Instagram download service error: ' + err.message };
-    }
-}
-
-// Pinterest downloader via snappin
-async function downloadPinterest(videoUrl) {
-    try {
-        const postData = `url=${encodeURIComponent(videoUrl)}`;
-        const response = await makeRequest({
-            hostname: 'snappin.app',
-            path: '/api/ajaxSearch',
-            method: 'POST',
-            protocol: 'https:',
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Content-Length': Buffer.byteLength(postData),
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Referer': 'https://snappin.app/fr',
-                'Origin': 'https://snappin.app'
-            }
-        }, postData);
-
-        const body = response.body;
-        const links = [];
-        let data;
-        try { data = JSON.parse(body); } catch (e) { data = null; }
-
-        if (data && data.links) {
-            Object.values(data.links).forEach(item => {
-                if (item.url) {
-                    links.push({ url: item.url, quality: item.q || 'Download', format: 'mp4' });
-                }
-            });
-        }
-
-        if (links.length === 0) {
-            const html = data?.data || body;
-            const urlMatches = html.match(/https?:\/\/[^\s"'<>]+\.(mp4|jpg|png|webp)[^\s"'<>]*/gi);
-            if (urlMatches) {
-                const unique = [...new Set(urlMatches)];
-                unique.forEach((url, i) => {
-                    const ext = url.match(/\.(mp4|jpg|png|webp)/i);
-                    links.push({ url: url, quality: `Download ${i + 1}`, format: ext ? ext[1] : 'mp4' });
-                });
-            }
-        }
-
-        if (links.length > 0) return { success: true, links };
-        return { success: false, error: 'Could not extract Pinterest download links.' };
-    } catch (err) {
-        return { success: false, error: 'Pinterest download service error: ' + err.message };
-    }
-}
-
-// Twitter/X downloader via snapvid
-async function downloadTwitter(videoUrl) {
-    try {
-        const postData = `url=${encodeURIComponent(videoUrl)}`;
-        const response = await makeRequest({
-            hostname: 'snapvid.net',
-            path: '/api/ajaxSearch',
-            method: 'POST',
-            protocol: 'https:',
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Content-Length': Buffer.byteLength(postData),
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Referer': 'https://snapvid.net/fr1/twitter-downloader',
-                'Origin': 'https://snapvid.net'
-            }
-        }, postData);
-
-        const body = response.body;
-        const links = [];
-        let data;
-        try { data = JSON.parse(body); } catch (e) { data = null; }
-
-        if (data && data.links) {
-            Object.values(data.links).forEach(item => {
-                if (item.url) {
-                    links.push({ url: item.url, quality: item.q || 'Download', format: 'mp4' });
-                }
-            });
-        }
-
-        if (links.length === 0) {
-            const html = data?.data || body;
-            const urlMatches = html.match(/https?:\/\/[^\s"'<>]+\.mp4[^\s"'<>]*/gi);
-            if (urlMatches) {
-                const unique = [...new Set(urlMatches)];
-                unique.forEach((url, i) => {
-                    links.push({ url: url, quality: i === 0 ? 'HD' : 'SD', format: 'mp4' });
-                });
-            }
-
-            // Also try to find video URLs in Twitter CDN
-            const twitterCdn = html.match(/https?:\/\/video\.twimg\.com[^\s"'<>]*/gi);
-            if (twitterCdn && links.length === 0) {
-                const unique = [...new Set(twitterCdn)];
-                unique.forEach((url, i) => {
-                    links.push({ url: url, quality: `Quality ${i + 1}`, format: 'mp4' });
-                });
-            }
-        }
-
-        if (links.length > 0) return { success: true, links };
-        return { success: false, error: 'Could not extract X/Twitter download links.' };
-    } catch (err) {
-        return { success: false, error: 'X/Twitter download service error: ' + err.message };
-    }
+    return {
+        success: links.length > 0,
+        links: links,
+        title: title,
+        thumbnail: thumbnail,
+        platform: platform
+    };
 }
 
 // Main handler
@@ -434,34 +105,44 @@ module.exports = async function handler(req, res) {
     const platform = detectPlatform(url);
 
     if (!platform) {
-        return res.status(400).json({ success: false, error: 'Unsupported platform' });
+        return res.status(400).json({ success: false, error: 'Unsupported platform. Try Facebook, TikTok, YouTube, Instagram, Pinterest, or X (Twitter).' });
     }
 
-    let result;
-
-    switch (platform) {
-        case 'facebook':
-            result = await downloadFacebook(url);
-            break;
-        case 'tiktok':
-            result = await downloadTiktok(url);
-            break;
-        case 'youtube':
-            result = await downloadYoutube(url);
-            break;
-        case 'instagram':
-            result = await downloadInstagram(url);
-            break;
-        case 'pinterest':
-            result = await downloadPinterest(url);
-            break;
-        case 'twitter':
-            result = await downloadTwitter(url);
-            break;
-        default:
-            result = { success: false, error: 'Unsupported platform' };
+    if (!process.env.RAPIDAPI_KEY) {
+        return res.status(500).json({ success: false, error: 'API key not configured. Please set RAPIDAPI_KEY environment variable.' });
     }
 
-    result.platform = platform;
-    return res.status(result.success ? 200 : 422).json(result);
+    try {
+        const response = await fetchFromRapidAPI(url);
+
+        if (response.statusCode === 429) {
+            return res.status(429).json({ success: false, error: 'Too many requests. Please try again later.' });
+        }
+
+        if (response.statusCode === 401) {
+            return res.status(401).json({ success: false, error: 'Invalid API key. Please check configuration.' });
+        }
+
+        if (response.statusCode !== 200) {
+            return res.status(422).json({ success: false, error: 'Could not process this URL. Please try again.' });
+        }
+
+        const result = transformResponse(response.data, platform);
+
+        if (!result.success) {
+            return res.status(422).json({
+                success: false,
+                error: 'Could not extract download links. The video may be private or unavailable.',
+                platform: platform
+            });
+        }
+
+        return res.status(200).json(result);
+    } catch (err) {
+        return res.status(500).json({
+            success: false,
+            error: 'Download service error: ' + err.message,
+            platform: platform
+        });
+    }
 };
