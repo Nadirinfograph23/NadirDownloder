@@ -234,13 +234,12 @@ function showResults(data, platform) {
     }
 
     // Set title
-    if (data.title) {
-        previewTitleText.textContent = data.title;
-        previewTitleText.style.display = 'block';
-    } else {
-        previewTitleText.textContent = platformInfo.name + ' Video';
-        previewTitleText.style.display = 'block';
+    var titleStr = data.title || (platformInfo.name + ' Video');
+    if (data.duration) {
+        titleStr += ' (' + data.duration + ')';
     }
+    previewTitleText.textContent = titleStr;
+    previewTitleText.style.display = 'block';
 
     // Build download buttons
     var html = '';
@@ -250,7 +249,7 @@ function showResults(data, platform) {
         var sizeLabel = link.size ? ' - ' + link.size : '';
         var btnClass = index === 0 ? 'preview-download-btn' : 'preview-download-btn secondary';
 
-        html += '<a href="' + escapeHtml(link.url) + '" class="' + btnClass + '" target="_blank" rel="noopener noreferrer" download>';
+        html += '<a href="' + escapeHtml(link.url) + '" class="' + btnClass + '" target="_blank" rel="noopener noreferrer">';
         html += '  <div class="dl-info">';
         html += '    <i class="fas fa-download"></i>';
         html += '    <span>' + escapeHtml(qualityLabel) + escapeHtml(sizeLabel) + '</span>';
