@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NADIR DOWNLOADER - Video Downloader</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- Animated background particles -->
+    <div class="bg-particles" id="particles"></div>
+
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="nav-brand">
+            <div class="nav-logo">
+                <i class="fas fa-download"></i>
+            </div>
+            <span class="nav-title">NADIR DOWNLOADER</span>
+        </div>
+        <div class="nav-links">
+            <a href="#platforms" class="nav-link">Platforms</a>
+            <a href="#how-it-works" class="nav-link">How it works</a>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <main class="hero">
+        <!-- Platform Icon (dynamic) -->
+        <div class="icon-container" id="iconContainer">
+            <div class="icon-glow"></div>
+            <div class="icon-box" id="iconBox">
+                <i class="fas fa-cloud-arrow-down" id="platformIcon"></i>
+            </div>
+            <div class="sparkle sparkle-1"><i class="fas fa-star"></i></div>
+            <div class="sparkle sparkle-2"><i class="fas fa-star"></i></div>
+        </div>
+
+        <!-- Title -->
+        <h1 class="main-title">NADIR DOWNLOADER</h1>
+        <p class="subtitle">Download videos from social media platforms — fast, free, and easy</p>
+
+        <!-- Download Input Section -->
+        <div class="download-section">
+            <div class="input-wrapper" id="inputWrapper">
+                <div class="input-icon" id="inputIcon">
+                    <i class="fas fa-link"></i>
+                </div>
+                <input 
+                    type="url" 
+                    id="urlInput" 
+                    class="url-input" 
+                    placeholder="Paste your video link here..."
+                    autocomplete="off"
+                    dir="ltr"
+                >
+                <button class="paste-btn" id="pasteBtn" title="Paste from clipboard">
+                    <i class="fas fa-paste"></i>
+                </button>
+                <button class="download-btn" id="downloadBtn">
+                    <span class="btn-text">Download</span>
+                    <i class="fas fa-arrow-down btn-icon"></i>
+                </button>
+            </div>
+            <p class="helper-text" id="helperText">Supports: Facebook, TikTok, YouTube, Instagram, Pinterest, X (Twitter)</p>
+        </div>
+
+        <!-- Platform badges -->
+        <div class="platform-badges" id="platforms">
+            <div class="badge" data-platform="facebook">
+                <i class="fab fa-facebook-f"></i>
+                <span>Facebook</span>
+            </div>
+            <div class="badge" data-platform="tiktok">
+                <i class="fab fa-tiktok"></i>
+                <span>TikTok</span>
+            </div>
+            <div class="badge" data-platform="youtube">
+                <i class="fab fa-youtube"></i>
+                <span>YouTube</span>
+            </div>
+            <div class="badge" data-platform="instagram">
+                <i class="fab fa-instagram"></i>
+                <span>Instagram</span>
+            </div>
+            <div class="badge" data-platform="pinterest">
+                <i class="fab fa-pinterest-p"></i>
+                <span>Pinterest</span>
+            </div>
+            <div class="badge" data-platform="twitter">
+                <i class="fab fa-x-twitter"></i>
+                <span>X (Twitter)</span>
+            </div>
+        </div>
+    </main>
+
+    <!-- Video Preview & Download Section -->
+    <section class="results-section" id="resultsSection" style="display:none;">
+        <div class="preview-card" id="previewCard">
+            <div class="preview-frame" id="previewFrame">
+                <div class="preview-thumbnail" id="previewThumbnail">
+                    <i class="fas fa-play-circle preview-play-icon" id="previewPlayIcon"></i>
+                </div>
+                <div class="preview-overlay" id="previewOverlay">
+                    <div class="preview-platform-badge" id="previewPlatformBadge">
+                        <i id="previewPlatformIcon"></i>
+                        <span id="previewPlatformName"></span>
+                    </div>
+                </div>
+            </div>
+            <div class="preview-info" id="previewInfo">
+                <p class="preview-title-text" id="previewTitleText"></p>
+                <div class="preview-downloads" id="previewDownloads"></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- How it Works Section -->
+    <section class="how-it-works" id="how-it-works">
+        <h2 class="section-title">How it works</h2>
+        <div class="steps">
+            <div class="step">
+                <div class="step-icon">
+                    <i class="fas fa-copy"></i>
+                </div>
+                <h3>1. Copy the Link</h3>
+                <p>Copy the video URL from your favorite social media platform</p>
+            </div>
+            <div class="step">
+                <div class="step-icon">
+                    <i class="fas fa-paste"></i>
+                </div>
+                <h3>2. Paste it Here</h3>
+                <p>Paste the link into the input field above — platform is auto-detected</p>
+            </div>
+            <div class="step">
+                <div class="step-icon">
+                    <i class="fas fa-download"></i>
+                </div>
+                <h3>3. Download</h3>
+                <p>Click the download button and get your video instantly</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <p>&copy; 2025 NADIR DOWNLOADER. All rights reserved.</p>
+        <p class="developer-credit">
+            <span>تطوير : </span>
+            <a href="https://www.facebook.com/nadir.infograph23" class="developer-link" id="developerLink" target="_blank" rel="noopener noreferrer">
+                <i class="fab fa-facebook-f"></i>
+                نذير حوامرية - NADIR INFOGRAPH
+            </a>
+        </p>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+</html>
