@@ -61,8 +61,13 @@ const inputIcon = document.getElementById('inputIcon');
 const helperText = document.getElementById('helperText');
 const iconGlow = iconContainer.querySelector('.icon-glow');
 const resultsSection = document.getElementById('resultsSection');
-const resultsContainer = document.getElementById('resultsContainer');
-const resultsTitle = document.getElementById('resultsTitle');
+const previewCard = document.getElementById('previewCard');
+const previewThumbnail = document.getElementById('previewThumbnail');
+const previewPlayIcon = document.getElementById('previewPlayIcon');
+const previewPlatformIcon = document.getElementById('previewPlatformIcon');
+const previewPlatformName = document.getElementById('previewPlatformName');
+const previewTitleText = document.getElementById('previewTitleText');
+const previewDownloads = document.getElementById('previewDownloads');
 
 let currentPlatform = null;
 let isDownloading = false;
@@ -207,7 +212,7 @@ function escapeHtml(str) {
     return div.innerHTML;
 }
 
-// Display download results
+// Display download results in preview card
 function showResults(data, platform) {
     resultsSection.style.display = 'block';
     setTimeout(function() {
@@ -215,48 +220,74 @@ function showResults(data, platform) {
     }, 100);
 
     var platformInfo = PLATFORMS[platform];
-    resultsTitle.innerHTML = '<i class="' + platformInfo.icon + '" style="color:' + platformInfo.color + '"></i> Download Links';
 
-    var html = '';
-    if (data.title) {
-        html += '<div class="result-title">' + escapeHtml(data.title) + '</div>';
+    // Set platform badge
+    previewPlatformIcon.className = platformInfo.icon;
+    previewPlatformIcon.style.color = platformInfo.color;
+    previewPlatformName.textContent = platformInfo.name;
+
+    // Set thumbnail if available
+    if (data.thumbnail) {
+        previewThumbnail.innerHTML = '<img src="' + escapeHtml(data.thumbnail) + '" alt="Video thumbnail"><i class="fas fa-play-circle preview-play-icon" id="previewPlayIcon"></i>';
+    } else {
+        previewThumbnail.innerHTML = '<i class="' + platformInfo.icon + '" style="font-size:64px; color:' + platformInfo.color + '; opacity:0.3"></i><i class="fas fa-play-circle preview-play-icon"></i>';
     }
-    html += '<div class="result-links">';
+
+    // Set title
+    if (data.title) {
+        previewTitleText.textContent = data.title;
+        previewTitleText.style.display = 'block';
+    } else {
+        previewTitleText.textContent = platformInfo.name + ' Video';
+        previewTitleText.style.display = 'block';
+    }
+
+    // Build download buttons
+    var html = '';
     data.links.forEach(function(link, index) {
-        var formatIcon = link.format === 'mp3' ? 'fas fa-music' : (link.format === 'jpg' || link.format === 'png' || link.format === 'webp' ? 'fas fa-image' : 'fas fa-video');
         var formatLabel = link.format ? link.format.toUpperCase() : 'MP4';
         var qualityLabel = link.quality || ('Quality ' + (index + 1));
-        var sizeLabel = link.size ? ' (' + link.size + ')' : '';
+        var sizeLabel = link.size ? ' - ' + link.size : '';
+        var btnClass = index === 0 ? 'preview-download-btn' : 'preview-download-btn secondary';
 
-        html += '<a href="' + escapeHtml(link.url) + '" class="result-link" target="_blank" rel="noopener noreferrer" download>';
-        html += '  <div class="result-link-info">';
-        html += '    <i class="' + formatIcon + '"></i>';
-        html += '    <span class="result-quality">' + escapeHtml(qualityLabel) + escapeHtml(sizeLabel) + '</span>';
-        html += '    <span class="result-format">' + formatLabel + '</span>';
+        html += '<a href="' + escapeHtml(link.url) + '" class="' + btnClass + '" target="_blank" rel="noopener noreferrer" download>';
+        html += '  <div class="dl-info">';
+        html += '    <i class="fas fa-download"></i>';
+        html += '    <span>' + escapeHtml(qualityLabel) + escapeHtml(sizeLabel) + '</span>';
         html += '  </div>';
-        html += '  <div class="result-link-action">';
-        html += '    <i class="fas fa-download"></i> Download';
-        html += '  </div>';
+        html += '  <span class="dl-format">' + formatLabel + '</span>';
         html += '</a>';
     });
-    html += '</div>';
-    resultsContainer.innerHTML = html;
+    previewDownloads.innerHTML = html;
 }
 
 // Hide results
 function hideResults() {
     resultsSection.style.display = 'none';
-    resultsContainer.innerHTML = '';
+    previewDownloads.innerHTML = '';
 }
 
-// Show error in results
-function showError(message) {
+// Show loading in preview card
+function showPreviewLoading(platform) {
+    var platformInfo = PLATFORMS[platform];
     resultsSection.style.display = 'block';
-    resultsTitle.innerHTML = '<i class="fas fa-exclamation-triangle" style="color: #ff4444"></i> Error';
-    resultsContainer.innerHTML = '<div class="result-error">' + escapeHtml(message) + '</div>';
+    previewPlatformIcon.className = platformInfo.icon;
+    previewPlatformIcon.style.color = platformInfo.color;
+    previewPlatformName.textContent = platformInfo.name;
+    previewThumbnail.innerHTML = '<div class="preview-loading"><i class="fas fa-spinner fa-spin"></i><span>Extracting video...</span></div>';
+    previewTitleText.textContent = '';
+    previewTitleText.style.display = 'none';
+    previewDownloads.innerHTML = '';
     setTimeout(function() {
         resultsSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }, 100);
+}
+
+// Show error in preview card
+function showError(message) {
+    previewThumbnail.innerHTML = '<div class="preview-error"><i class="fas fa-exclamation-triangle"></i>' + escapeHtml(message) + '</div>';
+    previewTitleText.style.display = 'none';
+    previewDownloads.innerHTML = '';
 }
 
 // Handle download - calls our serverless API
@@ -279,7 +310,7 @@ async function handleDownload() {
     if (isDownloading) return;
     
     setLoading(true);
-    hideResults();
+    showPreviewLoading(platform);
     showToast('Extracting download links from ' + PLATFORMS[platform].name + '...', PLATFORMS[platform].icon);
 
     try {

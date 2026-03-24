@@ -96,10 +96,25 @@
         </div>
     </main>
 
-    <!-- Download Results Section -->
+    <!-- Video Preview & Download Section -->
     <section class="results-section" id="resultsSection" style="display:none;">
-        <h2 class="results-title" id="resultsTitle"></h2>
-        <div class="results-container" id="resultsContainer"></div>
+        <div class="preview-card" id="previewCard">
+            <div class="preview-frame" id="previewFrame">
+                <div class="preview-thumbnail" id="previewThumbnail">
+                    <i class="fas fa-play-circle preview-play-icon" id="previewPlayIcon"></i>
+                </div>
+                <div class="preview-overlay" id="previewOverlay">
+                    <div class="preview-platform-badge" id="previewPlatformBadge">
+                        <i id="previewPlatformIcon"></i>
+                        <span id="previewPlatformName"></span>
+                    </div>
+                </div>
+            </div>
+            <div class="preview-info" id="previewInfo">
+                <p class="preview-title-text" id="previewTitleText"></p>
+                <div class="preview-downloads" id="previewDownloads"></div>
+            </div>
+        </div>
     </section>
 
     <!-- How it Works Section -->
