@@ -1,6 +1,6 @@
 /* ============================================
    NADIR DOWNLOADER - Main Script
-   Platform detection, icon switching, redirection
+   Platform detection, icon switching, on-site download
    ============================================ */
 
 // Platform configuration
@@ -10,48 +10,42 @@ const PLATFORMS = {
         icon: 'fab fa-facebook-f',
         color: '#1877f2',
         glow: 'rgba(24, 119, 242, 0.3)',
-        name: 'Facebook',
-        downloadUrl: 'https://snapsave.app/fr'
+        name: 'Facebook'
     },
     tiktok: {
         patterns: [/tiktok\.com/, /vm\.tiktok\.com/],
         icon: 'fab fa-tiktok',
         color: '#ff0050',
         glow: 'rgba(255, 0, 80, 0.3)',
-        name: 'TikTok',
-        downloadUrl: 'https://snaptik.app/fr2'
+        name: 'TikTok'
     },
     youtube: {
         patterns: [/youtube\.com/, /youtu\.be/, /yt\.be/],
         icon: 'fab fa-youtube',
         color: '#ff0000',
         glow: 'rgba(255, 0, 0, 0.3)',
-        name: 'YouTube',
-        downloadUrl: 'https://snapany.com/fr/youtube-1'
+        name: 'YouTube'
     },
     instagram: {
         patterns: [/instagram\.com/, /instagr\.am/],
         icon: 'fab fa-instagram',
         color: '#e4405f',
         glow: 'rgba(228, 64, 95, 0.3)',
-        name: 'Instagram',
-        downloadUrl: 'https://snapinsta.to/fr'
+        name: 'Instagram'
     },
     pinterest: {
         patterns: [/pinterest\.com/, /pin\.it/],
         icon: 'fab fa-pinterest-p',
         color: '#e60023',
         glow: 'rgba(230, 0, 35, 0.3)',
-        name: 'Pinterest',
-        downloadUrl: 'https://snappin.app/fr'
+        name: 'Pinterest'
     },
     twitter: {
         patterns: [/twitter\.com/, /x\.com/, /t\.co/],
         icon: 'fab fa-x-twitter',
         color: '#ffffff',
         glow: 'rgba(255, 255, 255, 0.2)',
-        name: 'X (Twitter)',
-        downloadUrl: 'https://snapvid.net/fr1/twitter-downloader'
+        name: 'X (Twitter)'
     }
 };
 
@@ -66,8 +60,12 @@ const inputWrapper = document.getElementById('inputWrapper');
 const inputIcon = document.getElementById('inputIcon');
 const helperText = document.getElementById('helperText');
 const iconGlow = iconContainer.querySelector('.icon-glow');
+const resultsSection = document.getElementById('resultsSection');
+const resultsContainer = document.getElementById('resultsContainer');
+const resultsTitle = document.getElementById('resultsTitle');
 
 let currentPlatform = null;
+let isDownloading = false;
 
 // Detect platform from URL
 function detectPlatform(url) {
@@ -187,8 +185,82 @@ function showToast(message, icon) {
     }, 3000);
 }
 
-// Handle download
-function handleDownload() {
+// Show loading state
+function setLoading(loading) {
+    isDownloading = loading;
+    if (loading) {
+        downloadBtn.innerHTML = '<span class="btn-text">Downloading...</span> <i class="fas fa-spinner fa-spin btn-icon"></i>';
+        downloadBtn.disabled = true;
+        downloadBtn.style.opacity = '0.7';
+    } else {
+        downloadBtn.innerHTML = '<span class="btn-text">Download</span> <i class="fas fa-arrow-down btn-icon"></i>';
+        downloadBtn.disabled = false;
+        downloadBtn.style.opacity = '1';
+    }
+}
+
+// HTML escape helper
+function escapeHtml(str) {
+    if (!str) return '';
+    var div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
+// Display download results
+function showResults(data, platform) {
+    resultsSection.style.display = 'block';
+    setTimeout(function() {
+        resultsSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }, 100);
+
+    var platformInfo = PLATFORMS[platform];
+    resultsTitle.innerHTML = '<i class="' + platformInfo.icon + '" style="color:' + platformInfo.color + '"></i> Download Links';
+
+    var html = '';
+    if (data.title) {
+        html += '<div class="result-title">' + escapeHtml(data.title) + '</div>';
+    }
+    html += '<div class="result-links">';
+    data.links.forEach(function(link, index) {
+        var formatIcon = link.format === 'mp3' ? 'fas fa-music' : (link.format === 'jpg' || link.format === 'png' || link.format === 'webp' ? 'fas fa-image' : 'fas fa-video');
+        var formatLabel = link.format ? link.format.toUpperCase() : 'MP4';
+        var qualityLabel = link.quality || ('Quality ' + (index + 1));
+        var sizeLabel = link.size ? ' (' + link.size + ')' : '';
+
+        html += '<a href="' + escapeHtml(link.url) + '" class="result-link" target="_blank" rel="noopener noreferrer" download>';
+        html += '  <div class="result-link-info">';
+        html += '    <i class="' + formatIcon + '"></i>';
+        html += '    <span class="result-quality">' + escapeHtml(qualityLabel) + escapeHtml(sizeLabel) + '</span>';
+        html += '    <span class="result-format">' + formatLabel + '</span>';
+        html += '  </div>';
+        html += '  <div class="result-link-action">';
+        html += '    <i class="fas fa-download"></i> Download';
+        html += '  </div>';
+        html += '</a>';
+    });
+    html += '</div>';
+    resultsContainer.innerHTML = html;
+}
+
+// Hide results
+function hideResults() {
+    resultsSection.style.display = 'none';
+    resultsContainer.innerHTML = '';
+}
+
+// Show error in results
+function showError(message) {
+    resultsSection.style.display = 'block';
+    resultsTitle.innerHTML = '<i class="fas fa-exclamation-triangle" style="color: #ff4444"></i> Error';
+    resultsContainer.innerHTML = '<div class="result-error">' + escapeHtml(message) + '</div>';
+    setTimeout(function() {
+        resultsSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }, 100);
+}
+
+// Handle download - calls our serverless API
+async function handleDownload() {
     var url = urlInput.value.trim();
     
     if (!url) {
@@ -203,15 +275,35 @@ function handleDownload() {
         showToast('Unsupported platform. Try Facebook, TikTok, YouTube, Instagram, Pinterest, or X', 'fas fa-exclamation-circle');
         return;
     }
+
+    if (isDownloading) return;
     
-    var downloadUrl = PLATFORMS[platform].downloadUrl;
-    
-    showToast('Redirecting to ' + PLATFORMS[platform].name + ' downloader...', PLATFORMS[platform].icon);
-    
-    // Open download service in new tab
-    setTimeout(function() {
-        window.open(downloadUrl, '_blank');
-    }, 500);
+    setLoading(true);
+    hideResults();
+    showToast('Extracting download links from ' + PLATFORMS[platform].name + '...', PLATFORMS[platform].icon);
+
+    try {
+        var response = await fetch('/api/download', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: url })
+        });
+
+        var data = await response.json();
+
+        if (data.success && data.links && data.links.length > 0) {
+            showResults(data, platform);
+            showToast('Download links ready!', 'fas fa-check');
+        } else {
+            showError(data.error || 'Could not extract download links. Please try again.');
+            showToast('Failed to extract links', 'fas fa-exclamation-circle');
+        }
+    } catch (err) {
+        showError('Network error. Please check your connection and try again.');
+        showToast('Connection error', 'fas fa-wifi');
+    } finally {
+        setLoading(false);
+    }
 }
 
 // Handle paste from clipboard
@@ -252,16 +344,6 @@ urlInput.addEventListener('keydown', function(e) {
     if (e.key === 'Enter') {
         handleDownload();
     }
-});
-
-// Badge click to navigate to platform downloader
-document.querySelectorAll('.badge').forEach(function(badge) {
-    badge.addEventListener('click', function() {
-        var platformKey = this.dataset.platform;
-        if (PLATFORMS[platformKey]) {
-            window.open(PLATFORMS[platformKey].downloadUrl, '_blank');
-        }
-    });
 });
 
 // Create background particles
