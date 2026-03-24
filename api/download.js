@@ -37,78 +37,163 @@ function makeRequest(options, postData) {
             res.on('end', () => resolve({ statusCode: res.statusCode, headers: res.headers, body: data }));
         });
         req.on('error', reject);
-        req.setTimeout(15000, () => { req.destroy(); reject(new Error('Request timeout')); });
+        req.setTimeout(20000, () => { req.destroy(); reject(new Error('Request timeout')); });
         if (postData) req.write(postData);
         req.end();
     });
 }
 
-// Facebook downloader via snapsave
+// Helper: sleep for polling
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// =============================================
+// Facebook downloader via snapsave.io
+// =============================================
 async function downloadFacebook(videoUrl) {
     try {
-        const postData = `url=${encodeURIComponent(videoUrl)}`;
+        const postData = `url=${encodeURIComponent(videoUrl)}&q_auto=0`;
         const response = await makeRequest({
-            hostname: 'snapsave.app',
-            path: '/action.php?lang=fr',
+            hostname: 'snapsave.io',
+            path: '/api/ajaxSearch',
             method: 'POST',
             protocol: 'https:',
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
                 'Content-Length': Buffer.byteLength(postData),
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Referer': 'https://snapsave.app/fr',
-                'Origin': 'https://snapsave.app'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                'Referer': 'https://snapsave.io/',
+                'Origin': 'https://snapsave.io',
+                'Accept': '*/*',
+                'Accept-Language': 'en-US,en;q=0.9'
             }
         }, postData);
 
         const body = response.body;
         const links = [];
+        let data;
+        try { data = JSON.parse(body); } catch (e) { data = null; }
 
-        // Try to extract download links from response
-        const hdMatch = body.match(/href="(https?:\/\/[^"]*)"[^>]*>.*?HD/gi);
-        const sdMatch = body.match(/href="(https?:\/\/[^"]*)"[^>]*>.*?SD/gi);
-        const urlMatches = body.match(/https?:\/\/[^\s"'<>]+\.mp4[^\s"'<>]*/gi);
-
-        if (urlMatches) {
-            const unique = [...new Set(urlMatches)];
-            unique.forEach((url, i) => {
-                links.push({ url: url, quality: i === 0 ? 'HD' : 'SD', format: 'mp4' });
-            });
-        }
-
-        if (links.length > 0) return { success: true, links };
-
-        // Try decoding encoded response
-        const encodedMatch = body.match(/decodeURIComponent\(escape\(atob\("([^"]+)"\)\)\)/);
-        if (encodedMatch) {
-            const decoded = Buffer.from(encodedMatch[1], 'base64').toString();
-            const decodedUrls = decoded.match(/https?:\/\/[^\s"'<>]+\.mp4[^\s"'<>]*/gi);
-            if (decodedUrls) {
-                const unique = [...new Set(decodedUrls)];
-                unique.forEach((url, i) => {
-                    links.push({ url: url, quality: i === 0 ? 'HD' : 'SD', format: 'mp4' });
+        // Try JSON response with data field containing HTML
+        if (data && data.data) {
+            const html = data.data;
+            const hrefMatches = html.match(/href="(https?:\/\/[^"]+)"/gi);
+            if (hrefMatches) {
+                hrefMatches.forEach((match, i) => {
+                    const url = match.match(/href="([^"]+)"/)[1];
+                    if (url.includes('.mp4') || url.includes('video') || url.includes('fbcdn')) {
+                        links.push({ url: url, quality: i === 0 ? 'HD' : 'SD', format: 'mp4' });
+                    }
                 });
-                return { success: true, links };
             }
         }
 
+        // Try to extract mp4 URLs directly
+        if (links.length === 0) {
+            const urlMatches = body.match(/https?:\/\/[^\s"'<>]+\.mp4[^\s"'<>]*/gi);
+            if (urlMatches) {
+                const unique = [...new Set(urlMatches)];
+                unique.forEach((url, i) => {
+                    links.push({ url: url, quality: i === 0 ? 'HD' : 'SD', format: 'mp4' });
+                });
+            }
+        }
+
+        // Try decoding encoded response
+        if (links.length === 0) {
+            const encodedMatch = body.match(/decodeURIComponent\(escape\(atob\("([^"]+)"\)\)\)/);
+            if (encodedMatch) {
+                const decoded = Buffer.from(encodedMatch[1], 'base64').toString();
+                const decodedUrls = decoded.match(/https?:\/\/[^\s"'<>]+\.mp4[^\s"'<>]*/gi);
+                if (decodedUrls) {
+                    const unique = [...new Set(decodedUrls)];
+                    unique.forEach((url, i) => {
+                        links.push({ url: url, quality: i === 0 ? 'HD' : 'SD', format: 'mp4' });
+                    });
+                }
+            }
+        }
+
+        if (links.length > 0) return { success: true, links };
         return { success: false, error: 'Could not extract download links. The video may be private or unavailable.' };
     } catch (err) {
         return { success: false, error: 'Facebook download service error: ' + err.message };
     }
 }
 
-// TikTok downloader via snaptik
+// =============================================
+// TikTok downloader via tikwm.com
+// =============================================
 async function downloadTiktok(videoUrl) {
     try {
-        // First get the page to extract token
+        const postData = `url=${encodeURIComponent(videoUrl)}&count=12&cursor=0&web=1&hd=1`;
+        const response = await makeRequest({
+            hostname: 'www.tikwm.com',
+            path: '/api/',
+            method: 'POST',
+            protocol: 'https:',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Content-Length': Buffer.byteLength(postData),
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                'Accept': 'application/json, text/javascript, */*; q=0.01',
+                'Origin': 'https://www.tikwm.com',
+                'Referer': 'https://www.tikwm.com/'
+            }
+        }, postData);
+
+        let data;
+        try { data = JSON.parse(response.body); } catch (e) { data = null; }
+
+        const links = [];
+
+        if (data && data.code === 0 && data.data) {
+            const d = data.data;
+            const base = 'https://www.tikwm.com';
+            if (d.hdplay) {
+                const hdUrl = d.hdplay.startsWith('http') ? d.hdplay : base + d.hdplay;
+                links.push({ url: hdUrl, quality: 'HD (No Watermark)', format: 'mp4' });
+            }
+            if (d.play) {
+                const playUrl = d.play.startsWith('http') ? d.play : base + d.play;
+                links.push({ url: playUrl, quality: 'No Watermark', format: 'mp4' });
+            }
+            if (d.wmplay) {
+                const wmUrl = d.wmplay.startsWith('http') ? d.wmplay : base + d.wmplay;
+                links.push({ url: wmUrl, quality: 'With Watermark', format: 'mp4' });
+            }
+            if (d.music) {
+                const musicUrl = d.music.startsWith('http') ? d.music : base + d.music;
+                links.push({ url: musicUrl, quality: 'Audio Only', format: 'mp3' });
+            }
+
+            const title = d.title || '';
+            const thumbnail = d.cover || d.origin_cover || '';
+
+            if (links.length > 0) {
+                return { success: true, links, title, thumbnail };
+            }
+        }
+
+        return { success: false, error: 'Could not extract TikTok download links. The video may be private.' };
+    } catch (err) {
+        return { success: false, error: 'TikTok download service error: ' + err.message };
+    }
+}
+
+// =============================================
+// TikTok downloader via snaptik (backup)
+// =============================================
+async function downloadTiktokSnaptik(videoUrl) {
+    try {
         const pageResponse = await makeRequest({
             hostname: 'snaptik.app',
             path: '/fr2',
             method: 'GET',
             protocol: 'https:',
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
             }
         });
 
@@ -124,7 +209,7 @@ async function downloadTiktok(videoUrl) {
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
                 'Content-Length': Buffer.byteLength(postData),
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
                 'Referer': 'https://snaptik.app/fr2',
                 'Origin': 'https://snaptik.app'
             }
@@ -141,7 +226,6 @@ async function downloadTiktok(videoUrl) {
             });
         }
 
-        // Also try to find download links in decoded content
         const encodedMatches = body.match(/atob\("([^"]+)"\)/g);
         if (encodedMatches) {
             encodedMatches.forEach(match => {
@@ -163,99 +247,132 @@ async function downloadTiktok(videoUrl) {
         }
 
         if (links.length > 0) return { success: true, links };
-        return { success: false, error: 'Could not extract TikTok download links. The video may be private.' };
+        return { success: false, error: 'Could not extract TikTok download links via snaptik.' };
     } catch (err) {
-        return { success: false, error: 'TikTok download service error: ' + err.message };
+        return { success: false, error: 'TikTok snaptik service error: ' + err.message };
     }
 }
 
-// YouTube downloader via snapany
+// =============================================
+// YouTube downloader via loader.to
+// =============================================
 async function downloadYoutube(videoUrl) {
     try {
-        const postData = `url=${encodeURIComponent(videoUrl)}`;
-        const response = await makeRequest({
-            hostname: 'snapany.com',
-            path: '/api/ajaxSearch',
-            method: 'POST',
+        // Step 1: Submit the download request
+        const submitResponse = await makeRequest({
+            hostname: 'loader.to',
+            path: '/ajax/download.php?format=1080&url=' + encodeURIComponent(videoUrl),
+            method: 'GET',
             protocol: 'https:',
             headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Content-Length': Buffer.byteLength(postData),
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Referer': 'https://snapany.com/fr/youtube-1',
-                'Origin': 'https://snapany.com'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                'Accept': 'application/json, text/javascript, */*; q=0.01',
+                'Referer': 'https://loader.to/',
+                'Origin': 'https://loader.to'
             }
-        }, postData);
+        });
 
-        const body = response.body;
-        let data;
-        try { data = JSON.parse(body); } catch (e) { data = null; }
+        let submitData;
+        try { submitData = JSON.parse(submitResponse.body); } catch (e) { submitData = null; }
 
-        const links = [];
+        if (!submitData || !submitData.success || !submitData.id) {
+            return { success: false, error: 'YouTube download service: failed to submit request.' };
+        }
 
-        if (data && data.links) {
-            // Process video links
-            if (data.links.mp4) {
-                Object.values(data.links.mp4).forEach(item => {
-                    if (item.url || item.k) {
-                        links.push({
-                            url: item.url || item.k,
-                            quality: item.q || item.quality || 'Video',
-                            format: 'mp4',
-                            size: item.size || ''
-                        });
-                    }
-                });
+        const jobId = submitData.id;
+
+        // Step 2: Poll for progress (max 30 seconds)
+        let downloadUrl = null;
+        for (let i = 0; i < 15; i++) {
+            await sleep(2000);
+
+            const progressResponse = await makeRequest({
+                hostname: 'loader.to',
+                path: '/ajax/progress.php?id=' + jobId,
+                method: 'GET',
+                protocol: 'https:',
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                    'Accept': 'application/json',
+                    'Referer': 'https://loader.to/'
+                }
+            });
+
+            let progressData;
+            try { progressData = JSON.parse(progressResponse.body); } catch (e) { progressData = null; }
+
+            if (progressData && progressData.success === 1 && progressData.download_url) {
+                downloadUrl = progressData.download_url;
+                break;
             }
-            // Process audio links
-            if (data.links.mp3) {
-                Object.values(data.links.mp3).forEach(item => {
-                    if (item.url || item.k) {
-                        links.push({
-                            url: item.url || item.k,
-                            quality: item.q || item.quality || 'Audio',
-                            format: 'mp3',
-                            size: item.size || ''
-                        });
-                    }
-                });
+
+            // success:1 with no download_url means conversion failed
+            if (progressData && progressData.success === 1 && !progressData.download_url) {
+                break;
+            }
+
+            // success:0 with progress > 0 means still processing - continue polling
+            // success:0 with progress === 0 and no text means genuine failure
+            if (progressData && progressData.success === 0 && progressData.progress === 0) {
+                break;
             }
         }
 
-        // Fallback: extract from HTML response
-        if (links.length === 0) {
-            const urlMatches = body.match(/https?:\/\/[^\s"'<>]+\.(mp4|webm|m4a)[^\s"'<>]*/gi);
-            if (urlMatches) {
-                const unique = [...new Set(urlMatches)];
-                unique.forEach((url, i) => {
-                    const ext = url.match(/\.(mp4|webm|m4a)/i);
-                    links.push({ url: url, quality: `Quality ${i + 1}`, format: ext ? ext[1] : 'mp4' });
-                });
-            }
+        if (!downloadUrl) {
+            return { success: false, error: 'YouTube download: conversion timed out or failed.' };
         }
 
-        if (links.length > 0) return { success: true, links, title: data?.title || '' };
-        return { success: false, error: 'Could not extract YouTube download links.' };
+        const links = [
+            { url: downloadUrl, quality: '1080p', format: 'mp4' }
+        ];
+
+        // Get metadata via noembed
+        let title = '';
+        let thumbnail = '';
+        try {
+            const metaResponse = await makeRequest({
+                hostname: 'noembed.com',
+                path: '/embed?url=' + encodeURIComponent(videoUrl),
+                method: 'GET',
+                protocol: 'https:',
+                headers: {
+                    'User-Agent': 'Mozilla/5.0',
+                    'Accept': 'application/json'
+                }
+            });
+            let meta;
+            try { meta = JSON.parse(metaResponse.body); } catch (e) { meta = null; }
+            if (meta) {
+                title = meta.title || '';
+                thumbnail = meta.thumbnail_url || '';
+            }
+        } catch (e) {}
+
+        return { success: true, links, title, thumbnail };
     } catch (err) {
         return { success: false, error: 'YouTube download service error: ' + err.message };
     }
 }
 
-// Instagram downloader via snapinsta
+// =============================================
+// Instagram downloader via snapsave.io
+// =============================================
 async function downloadInstagram(videoUrl) {
     try {
-        const postData = `url=${encodeURIComponent(videoUrl)}`;
+        const postData = `url=${encodeURIComponent(videoUrl)}&q_auto=0`;
         const response = await makeRequest({
-            hostname: 'snapinsta.to',
+            hostname: 'snapsave.io',
             path: '/api/ajaxSearch',
             method: 'POST',
             protocol: 'https:',
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
                 'Content-Length': Buffer.byteLength(postData),
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Referer': 'https://snapinsta.to/fr',
-                'Origin': 'https://snapinsta.to'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                'Referer': 'https://snapsave.io/',
+                'Origin': 'https://snapsave.io',
+                'Accept': '*/*',
+                'Accept-Language': 'en-US,en;q=0.9'
             }
         }, postData);
 
@@ -264,33 +381,26 @@ async function downloadInstagram(videoUrl) {
         let data;
         try { data = JSON.parse(body); } catch (e) { data = null; }
 
-        // Try JSON response
-        if (data && data.links) {
-            Object.values(data.links).forEach(item => {
-                if (item.url) {
-                    links.push({ url: item.url, quality: item.q || 'Download', format: 'mp4' });
-                }
-            });
-        }
-
-        // Try extracting from HTML in response
-        if (links.length === 0) {
-            const html = data?.data || body;
+        if (data && data.data) {
+            const html = data.data;
             const hrefMatches = html.match(/href="(https?:\/\/[^"]+)"/gi);
             if (hrefMatches) {
                 hrefMatches.forEach((match, i) => {
                     const url = match.match(/href="([^"]+)"/)[1];
-                    if (url.includes('instagram') || url.includes('cdninstagram') || url.includes('.mp4') || url.includes('.jpg')) {
-                        links.push({ url: url, quality: `Download ${i + 1}`, format: url.includes('.mp4') ? 'mp4' : 'jpg' });
+                    if (url.includes('instagram') || url.includes('cdninstagram') || url.includes('.mp4') || url.includes('.jpg') || url.includes('fbcdn')) {
+                        links.push({ url: url, quality: 'Download ' + (i + 1), format: url.includes('.mp4') ? 'mp4' : 'jpg' });
                     }
                 });
             }
+        }
 
+        if (links.length === 0) {
+            const html = (data && data.data) ? data.data : body;
             const urlMatches = html.match(/https?:\/\/[^\s"'<>]*(?:instagram|cdninstagram|fbcdn)[^\s"'<>]*/gi);
-            if (urlMatches && links.length === 0) {
+            if (urlMatches) {
                 const unique = [...new Set(urlMatches)];
                 unique.forEach((url, i) => {
-                    links.push({ url: url, quality: `Download ${i + 1}`, format: url.includes('.mp4') ? 'mp4' : 'jpg' });
+                    links.push({ url: url, quality: 'Download ' + (i + 1), format: url.includes('.mp4') ? 'mp4' : 'jpg' });
                 });
             }
         }
@@ -302,21 +412,25 @@ async function downloadInstagram(videoUrl) {
     }
 }
 
-// Pinterest downloader via snappin
+// =============================================
+// Pinterest downloader via snapsave.io
+// =============================================
 async function downloadPinterest(videoUrl) {
     try {
-        const postData = `url=${encodeURIComponent(videoUrl)}`;
+        const postData = `url=${encodeURIComponent(videoUrl)}&q_auto=0`;
         const response = await makeRequest({
-            hostname: 'snappin.app',
+            hostname: 'snapsave.io',
             path: '/api/ajaxSearch',
             method: 'POST',
             protocol: 'https:',
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
                 'Content-Length': Buffer.byteLength(postData),
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Referer': 'https://snappin.app/fr',
-                'Origin': 'https://snappin.app'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                'Referer': 'https://snapsave.io/',
+                'Origin': 'https://snapsave.io',
+                'Accept': '*/*',
+                'Accept-Language': 'en-US,en;q=0.9'
             }
         }, postData);
 
@@ -325,22 +439,28 @@ async function downloadPinterest(videoUrl) {
         let data;
         try { data = JSON.parse(body); } catch (e) { data = null; }
 
-        if (data && data.links) {
-            Object.values(data.links).forEach(item => {
-                if (item.url) {
-                    links.push({ url: item.url, quality: item.q || 'Download', format: 'mp4' });
-                }
-            });
+        if (data && data.data) {
+            const html = data.data;
+            const hrefMatches = html.match(/href="(https?:\/\/[^"]+)"/gi);
+            if (hrefMatches) {
+                hrefMatches.forEach((match, i) => {
+                    const url = match.match(/href="([^"]+)"/)[1];
+                    if (url.includes('.mp4') || url.includes('.jpg') || url.includes('.png') || url.includes('.webp') || url.includes('pinimg')) {
+                        const ext = url.match(/\.(mp4|jpg|png|webp)/i);
+                        links.push({ url: url, quality: 'Download ' + (i + 1), format: ext ? ext[1] : 'mp4' });
+                    }
+                });
+            }
         }
 
         if (links.length === 0) {
-            const html = data?.data || body;
+            const html = (data && data.data) ? data.data : body;
             const urlMatches = html.match(/https?:\/\/[^\s"'<>]+\.(mp4|jpg|png|webp)[^\s"'<>]*/gi);
             if (urlMatches) {
                 const unique = [...new Set(urlMatches)];
                 unique.forEach((url, i) => {
                     const ext = url.match(/\.(mp4|jpg|png|webp)/i);
-                    links.push({ url: url, quality: `Download ${i + 1}`, format: ext ? ext[1] : 'mp4' });
+                    links.push({ url: url, quality: 'Download ' + (i + 1), format: ext ? ext[1] : 'mp4' });
                 });
             }
         }
@@ -352,21 +472,25 @@ async function downloadPinterest(videoUrl) {
     }
 }
 
-// Twitter/X downloader via snapvid
+// =============================================
+// Twitter/X downloader via snapsave.io
+// =============================================
 async function downloadTwitter(videoUrl) {
     try {
-        const postData = `url=${encodeURIComponent(videoUrl)}`;
+        const postData = `url=${encodeURIComponent(videoUrl)}&q_auto=0`;
         const response = await makeRequest({
-            hostname: 'snapvid.net',
+            hostname: 'snapsave.io',
             path: '/api/ajaxSearch',
             method: 'POST',
             protocol: 'https:',
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
                 'Content-Length': Buffer.byteLength(postData),
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Referer': 'https://snapvid.net/fr1/twitter-downloader',
-                'Origin': 'https://snapvid.net'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                'Referer': 'https://snapsave.io/',
+                'Origin': 'https://snapsave.io',
+                'Accept': '*/*',
+                'Accept-Language': 'en-US,en;q=0.9'
             }
         }, postData);
 
@@ -375,16 +499,21 @@ async function downloadTwitter(videoUrl) {
         let data;
         try { data = JSON.parse(body); } catch (e) { data = null; }
 
-        if (data && data.links) {
-            Object.values(data.links).forEach(item => {
-                if (item.url) {
-                    links.push({ url: item.url, quality: item.q || 'Download', format: 'mp4' });
-                }
-            });
+        if (data && data.data) {
+            const html = data.data;
+            const hrefMatches = html.match(/href="(https?:\/\/[^"]+)"/gi);
+            if (hrefMatches) {
+                hrefMatches.forEach((match, i) => {
+                    const url = match.match(/href="([^"]+)"/)[1];
+                    if (url.includes('.mp4') || url.includes('video') || url.includes('twimg')) {
+                        links.push({ url: url, quality: i === 0 ? 'HD' : 'SD', format: 'mp4' });
+                    }
+                });
+            }
         }
 
         if (links.length === 0) {
-            const html = data?.data || body;
+            const html = (data && data.data) ? data.data : body;
             const urlMatches = html.match(/https?:\/\/[^\s"'<>]+\.mp4[^\s"'<>]*/gi);
             if (urlMatches) {
                 const unique = [...new Set(urlMatches)];
@@ -393,12 +522,11 @@ async function downloadTwitter(videoUrl) {
                 });
             }
 
-            // Also try to find video URLs in Twitter CDN
             const twitterCdn = html.match(/https?:\/\/video\.twimg\.com[^\s"'<>]*/gi);
             if (twitterCdn && links.length === 0) {
                 const unique = [...new Set(twitterCdn)];
                 unique.forEach((url, i) => {
-                    links.push({ url: url, quality: `Quality ${i + 1}`, format: 'mp4' });
+                    links.push({ url: url, quality: 'Quality ' + (i + 1), format: 'mp4' });
                 });
             }
         }
@@ -411,178 +539,95 @@ async function downloadTwitter(videoUrl) {
 }
 
 // =============================================
-// FALLBACK 1: Silva API
+// FALLBACK: loader.to (multi-platform)
+// Supports YouTube, Facebook, Instagram, TikTok,
+// Twitter, Pinterest and many more
 // =============================================
-async function downloadViaSilvaAPI(videoUrl) {
+async function downloadViaLoaderTo(videoUrl, platform) {
     try {
-        const apiUrl = `https://silva-ap-is.vercel.app/api/tiktok?url=${encodeURIComponent(videoUrl)}&apikey=silva`;
-        const parsed = new URL(apiUrl);
+        const format = (platform === 'youtube') ? '1080' : '360';
 
-        const response = await makeRequest({
-            hostname: parsed.hostname,
-            path: parsed.pathname + parsed.search,
+        const submitResponse = await makeRequest({
+            hostname: 'loader.to',
+            path: '/ajax/download.php?format=' + format + '&url=' + encodeURIComponent(videoUrl),
             method: 'GET',
             protocol: 'https:',
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'application/json'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                'Accept': 'application/json, text/javascript, */*; q=0.01',
+                'Referer': 'https://loader.to/',
+                'Origin': 'https://loader.to'
             }
         });
 
-        let data;
-        try { data = JSON.parse(response.body); } catch (e) { data = null; }
+        let submitData;
+        try { submitData = JSON.parse(submitResponse.body); } catch (e) { submitData = null; }
 
-        if (!data) {
-            return { success: false, error: 'Silva API returned invalid response' };
-        }
-
-        const links = [];
-
-        if (data.result && data.result.download_url) {
-            links.push({ url: data.result.download_url, quality: 'HD (No Watermark)', format: 'mp4' });
-        }
-        if (data.result && data.result.download_url_wm) {
-            links.push({ url: data.result.download_url_wm, quality: 'With Watermark', format: 'mp4' });
-        }
-        if (data.data && data.data.play) {
-            links.push({ url: data.data.play, quality: 'HD Video', format: 'mp4' });
-        }
-        if (data.data && data.data.wmplay) {
-            links.push({ url: data.data.wmplay, quality: 'With Watermark', format: 'mp4' });
-        }
-        if (data.data && data.data.hdplay) {
-            links.push({ url: data.data.hdplay, quality: 'HD Video', format: 'mp4' });
-        }
-        if (data.data && data.data.music) {
-            links.push({ url: data.data.music, quality: 'Audio Only', format: 'mp3' });
-        }
-        if (data.url) {
-            links.push({ url: data.url, quality: 'Download', format: 'mp4' });
-        }
-        if (data.video) {
-            links.push({ url: data.video, quality: 'Video', format: 'mp4' });
-        }
-        if (data.download) {
-            links.push({ url: data.download, quality: 'Download', format: 'mp4' });
+        if (!submitData || !submitData.success || !submitData.id) {
+            return { success: false, error: 'Loader.to: failed to submit download request.' };
         }
 
-        if (data.links && Array.isArray(data.links)) {
-            data.links.forEach((link, i) => {
-                if (typeof link === 'string') {
-                    links.push({ url: link, quality: `Quality ${i + 1}`, format: 'mp4' });
-                } else if (link.url) {
-                    links.push({
-                        url: link.url,
-                        quality: link.quality || link.q || `Quality ${i + 1}`,
-                        format: link.format || 'mp4'
-                    });
+        const jobId = submitData.id;
+
+        // Poll for progress (max ~40 seconds)
+        let downloadUrl = null;
+        for (let i = 0; i < 20; i++) {
+            await sleep(2000);
+
+            const progressResponse = await makeRequest({
+                hostname: 'loader.to',
+                path: '/ajax/progress.php?id=' + jobId,
+                method: 'GET',
+                protocol: 'https:',
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                    'Accept': 'application/json',
+                    'Referer': 'https://loader.to/'
                 }
             });
-        }
 
-        const title = data.result?.title || data.data?.title || data.title || '';
-        const thumbnail = data.result?.thumbnail || data.data?.cover || data.data?.origin_cover || data.thumbnail || '';
+            let progressData;
+            try { progressData = JSON.parse(progressResponse.body); } catch (e) { progressData = null; }
 
-        if (links.length > 0) {
-            return { success: true, links, title, thumbnail };
-        }
-
-        return { success: false, error: 'Silva API: no download links found' };
-    } catch (err) {
-        return { success: false, error: 'Silva API error: ' + err.message };
-    }
-}
-
-// =============================================
-// FALLBACK 2: FastSaver API
-// =============================================
-async function downloadViaFastSaver(videoUrl) {
-    try {
-        const postData = JSON.stringify({ url: videoUrl });
-
-        const response = await makeRequest({
-            hostname: 'api.fastsaverapi.com',
-            path: '/v2/download',
-            method: 'POST',
-            protocol: 'https:',
-            headers: {
-                'Content-Type': 'application/json',
-                'Content-Length': Buffer.byteLength(postData),
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'application/json'
+            if (progressData && progressData.success === 1 && progressData.download_url) {
+                downloadUrl = progressData.download_url;
+                break;
             }
-        }, postData);
 
-        let data;
-        try { data = JSON.parse(response.body); } catch (e) { data = null; }
+            // success:1 with no download_url means conversion failed
+            if (progressData && progressData.success === 1 && !progressData.download_url) {
+                return { success: false, error: 'Loader.to: video conversion failed.' };
+            }
 
-        if (!data) {
-            return { success: false, error: 'FastSaver API returned invalid response' };
+            // success:0 with progress > 0 means still processing - continue polling
+            // success:0 with progress === 0 means genuine failure
+            if (progressData && progressData.success === 0 && progressData.progress === 0) {
+                return { success: false, error: 'Loader.to: video conversion failed.' };
+            }
         }
 
-        const links = [];
-
-        if (data.url) {
-            links.push({
-                url: Array.isArray(data.url) ? data.url[0] : data.url,
-                quality: 'HD Video',
-                format: 'mp4'
-            });
+        if (!downloadUrl) {
+            return { success: false, error: 'Loader.to: conversion timed out.' };
         }
 
-        if (data.video) {
-            const videos = Array.isArray(data.video) ? data.video : [data.video];
-            videos.forEach((v, i) => {
-                if (typeof v === 'string') {
-                    links.push({ url: v, quality: i === 0 ? 'HD' : 'SD', format: 'mp4' });
-                } else if (v.url) {
-                    links.push({
-                        url: v.url,
-                        quality: v.quality || (i === 0 ? 'HD' : 'SD'),
-                        format: v.format || 'mp4'
-                    });
+        const links = [
+            { url: downloadUrl, quality: format === '1080' ? '1080p' : 'Download', format: 'mp4' }
+        ];
+
+        // Try to get thumbnail from content
+        if (submitData.content) {
+            try {
+                const decoded = Buffer.from(submitData.content, 'base64').toString();
+                const imgMatch = decoded.match(/src="(https?:\/\/[^"]+)"/);
+                if (imgMatch) {
+                    return { success: true, links, thumbnail: imgMatch[1] };
                 }
-            });
+            } catch (e) {}
         }
 
-        if (data.urls && Array.isArray(data.urls)) {
-            data.urls.forEach((item, i) => {
-                if (typeof item === 'string') {
-                    links.push({ url: item, quality: `Quality ${i + 1}`, format: 'mp4' });
-                } else if (item.url) {
-                    links.push({
-                        url: item.url,
-                        quality: item.quality || item.q || `Quality ${i + 1}`,
-                        format: item.ext || item.format || 'mp4',
-                        size: item.size || ''
-                    });
-                }
-            });
-        }
-
-        if (data.medias && Array.isArray(data.medias)) {
-            data.medias.forEach((media, i) => {
-                if (media.url) {
-                    links.push({
-                        url: media.url,
-                        quality: media.quality || media.formattedSize || `Quality ${i + 1}`,
-                        format: media.extension || 'mp4',
-                        size: media.formattedSize || ''
-                    });
-                }
-            });
-        }
-
-        const title = data.title || data.meta?.title || '';
-        const thumbnail = data.thumbnail || data.meta?.thumbnail || data.cover || '';
-
-        if (links.length > 0) {
-            return { success: true, links, title, thumbnail };
-        }
-
-        return { success: false, error: 'FastSaver API: no download links found' };
+        return { success: true, links };
     } catch (err) {
-        return { success: false, error: 'FastSaver API error: ' + err.message };
+        return { success: false, error: 'Loader.to error: ' + err.message };
     }
 }
 
@@ -602,10 +647,20 @@ async function downloadPrimary(url, platform) {
 }
 
 // =============================================
+// SECONDARY: TikTok has a backup scraper
+// =============================================
+async function downloadSecondary(url, platform) {
+    if (platform === 'tiktok') {
+        return downloadTiktokSnaptik(url);
+    }
+    return { success: false, error: 'No secondary scraper for this platform' };
+}
+
+// =============================================
 // MAIN HANDLER with fallback chain:
-// 1. Primary scrapers (yt-dlp equivalent)
-// 2. Silva API (fallback)
-// 3. FastSaver API (fallback)
+// 1. Primary scrapers (platform-specific)
+// 2. Secondary scrapers (platform-specific backup)
+// 3. loader.to (universal fallback)
 // =============================================
 module.exports = async function handler(req, res) {
     // CORS headers
@@ -644,21 +699,21 @@ module.exports = async function handler(req, res) {
 
     const primaryError = result.error;
 
-    // 2. Fallback: Silva API
-    result = await downloadViaSilvaAPI(url);
+    // 2. Secondary: platform-specific backup scrapers
+    result = await downloadSecondary(url, platform);
     if (result.success) {
         result.platform = platform;
-        result.source = 'silva';
+        result.source = 'secondary';
         return res.status(200).json(result);
     }
 
-    const silvaError = result.error;
+    const secondaryError = result.error;
 
-    // 3. Fallback: FastSaver API
-    result = await downloadViaFastSaver(url);
+    // 3. Fallback: loader.to (multi-platform)
+    result = await downloadViaLoaderTo(url, platform);
     if (result.success) {
         result.platform = platform;
-        result.source = 'fastsaver';
+        result.source = 'loader';
         return res.status(200).json(result);
     }
 
@@ -669,8 +724,8 @@ module.exports = async function handler(req, res) {
         error: 'All download methods failed. Please try again later.',
         details: {
             primary: primaryError,
-            silva: silvaError,
-            fastsaver: result.error
+            secondary: secondaryError,
+            loader: result.error
         }
     });
 };
