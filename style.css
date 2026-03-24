@@ -151,6 +151,82 @@ body {
     transform: scale(1.1);
 }
 
+/* Language Switcher */
+.lang-switcher {
+    position: relative;
+    margin-left: auto;
+}
+
+.lang-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    font-size: 16px;
+    cursor: pointer;
+    transition: all var(--transition);
+}
+
+.lang-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: rgba(200, 255, 0, 0.05);
+}
+
+.lang-dropdown {
+    display: none;
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-lg);
+    overflow: hidden;
+    z-index: 200;
+    min-width: 160px;
+}
+
+.lang-dropdown.show {
+    display: block;
+}
+
+.lang-option {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 10px 16px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 14px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all var(--transition);
+    text-align: left;
+}
+
+.lang-option:hover {
+    background: var(--bg-input);
+    color: var(--text-primary);
+}
+
+.lang-option.active {
+    color: var(--accent);
+    background: rgba(200, 255, 0, 0.05);
+}
+
+.flag-emoji {
+    font-size: 20px;
+    line-height: 1;
+}
+
 .nav-links {
     display: flex;
     gap: 24px;
@@ -873,6 +949,14 @@ body {
         display: none;
     }
 
+    .nav-title {
+        font-size: 13px;
+    }
+
+    .lang-switcher {
+        margin-left: 8px;
+    }
+
     .hero {
         padding: 100px 16px 40px;
     }
@@ -941,4 +1025,37 @@ body {
         height: 64px;
         font-size: 26px;
     }
+
+    .nav-title {
+        font-size: 11px;
+        letter-spacing: 0.5px;
+    }
+}
+
+/* RTL Support */
+[dir="rtl"] .nav-brand {
+    flex-direction: row-reverse;
+}
+
+[dir="rtl"] .nav-fb-icon {
+    margin-left: 0;
+    margin-right: 4px;
+}
+
+[dir="rtl"] .lang-switcher {
+    margin-left: 0;
+    margin-right: auto;
+}
+
+[dir="rtl"] .lang-dropdown {
+    right: auto;
+    left: 0;
+}
+
+[dir="rtl"] .lang-option {
+    text-align: right;
+}
+
+[dir="rtl"] .developer-credit {
+    direction: rtl;
 }
