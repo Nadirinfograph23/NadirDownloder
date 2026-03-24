@@ -212,6 +212,19 @@ function escapeHtml(str) {
     return div.innerHTML;
 }
 
+// Build a safe filename from the video title and quality
+function buildFilename(title, quality, format) {
+    var name = (title || 'video')
+        .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
+        .replace(/\s+/g, '_')
+        .replace(/_{2,}/g, '_')
+        .replace(/^_+|_+$/g, '')
+        .slice(0, 150);
+    var ext = (format || 'mp4').toLowerCase();
+    var q = quality ? '_' + quality : '';
+    return name + q + '.' + ext;
+}
+
 // Display download results in preview card
 function showResults(data, platform) {
     resultsSection.style.display = 'block';
@@ -249,7 +262,11 @@ function showResults(data, platform) {
         var sizeLabel = link.size ? ' - ' + link.size : '';
         var btnClass = index === 0 ? 'preview-download-btn' : 'preview-download-btn secondary';
 
-        html += '<a href="' + escapeHtml(link.url) + '" class="' + btnClass + '" target="_blank" rel="noopener noreferrer">';
+        // Route through our stream proxy so the browser downloads instead of playing
+        var fname = buildFilename(data.title, link.quality, link.format);
+        var dlUrl = '/api/stream?url=' + encodeURIComponent(link.url) + '&filename=' + encodeURIComponent(fname);
+
+        html += '<a href="' + escapeHtml(dlUrl) + '" class="' + btnClass + '">';
         html += '  <div class="dl-info">';
         html += '    <i class="fas fa-download"></i>';
         html += '    <span>' + escapeHtml(qualityLabel) + escapeHtml(sizeLabel) + '</span>';
