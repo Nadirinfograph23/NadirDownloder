@@ -130,6 +130,27 @@ body {
     letter-spacing: 1px;
 }
 
+.nav-fb-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-sm);
+    background: rgba(24, 119, 242, 0.15);
+    color: #1877f2;
+    font-size: 14px;
+    text-decoration: none;
+    transition: all var(--transition);
+    margin-left: 4px;
+}
+
+.nav-fb-icon:hover {
+    background: rgba(24, 119, 242, 0.3);
+    color: #1877f2;
+    transform: scale(1.1);
+}
+
 .nav-links {
     display: flex;
     gap: 24px;

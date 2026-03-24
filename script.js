@@ -249,7 +249,7 @@ function showResults(data, platform) {
         var sizeLabel = link.size ? ' - ' + link.size : '';
         var btnClass = index === 0 ? 'preview-download-btn' : 'preview-download-btn secondary';
 
-        html += '<a href="' + escapeHtml(link.url) + '" class="' + btnClass + '" target="_blank" rel="noopener noreferrer">';
+        html += '<a href="' + escapeHtml(link.url) + '" class="' + btnClass + '" download rel="noopener noreferrer">';
         html += '  <div class="dl-info">';
         html += '    <i class="fas fa-download"></i>';
         html += '    <span>' + escapeHtml(qualityLabel) + escapeHtml(sizeLabel) + '</span>';
@@ -404,7 +404,39 @@ function setupDeveloperLink() {
         if (isMobile) {
             e.preventDefault();
             // Try to open Facebook app first, fallback to web
-            var fbAppUrl = 'fb://profile/nadir.infograph23';
+            var fbAppUrl = 'fb://facewebmodal/f?href=https://www.facebook.com/nadir.infograph23';
+            var fbWebUrl = 'https://www.facebook.com/nadir.infograph23';
+            
+            var appOpened = false;
+            var timeout = setTimeout(function() {
+                if (!appOpened) {
+                    window.open(fbWebUrl, '_blank');
+                }
+            }, 1500);
+            
+            window.location.href = fbAppUrl;
+            
+            window.addEventListener('blur', function onBlur() {
+                appOpened = true;
+                clearTimeout(timeout);
+                window.removeEventListener('blur', onBlur);
+            });
+        }
+        // On desktop, the default <a> tag behavior opens the web URL in a new tab
+    });
+}
+
+// Setup Facebook nav icon - open Facebook app on mobile, web on desktop
+function setupFacebookNavIcon() {
+    var fbNavIcon = document.getElementById('fbNavIcon');
+    if (!fbNavIcon) return;
+    
+    fbNavIcon.addEventListener('click', function(e) {
+        var isMobile = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        
+        if (isMobile) {
+            e.preventDefault();
+            var fbAppUrl = 'fb://facewebmodal/f?href=https://www.facebook.com/nadir.infograph23';
             var fbWebUrl = 'https://www.facebook.com/nadir.infograph23';
             
             var appOpened = false;
@@ -430,5 +462,6 @@ function setupDeveloperLink() {
 document.addEventListener('DOMContentLoaded', function() {
     createParticles();
     setupDeveloperLink();
+    setupFacebookNavIcon();
     urlInput.focus();
 });
