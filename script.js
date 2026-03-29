@@ -35,7 +35,8 @@ var TRANSLATIONS = {
         extracting_video: 'Extracting video...',
         error_extract: 'Could not extract download links. Please try again.',
         error_network: 'Network error. Please check your connection and try again.',
-        detected_suffix: ' detected \u2014 ready to download!'
+        detected_suffix: ' detected \u2014 ready to download!',
+        pwa_install_text: 'Install app for a better experience'
     },
     ar: {
         nav_platforms: '\u0627\u0644\u0645\u0646\u0635\u0627\u062a',
@@ -65,7 +66,8 @@ var TRANSLATIONS = {
         extracting_video: '\u062c\u0627\u0631\u064a \u0627\u0633\u062a\u062e\u0631\u0627\u062c \u0627\u0644\u0641\u064a\u062f\u064a\u0648...',
         error_extract: '\u062a\u0639\u0630\u0631 \u0627\u0633\u062a\u062e\u0631\u0627\u062c \u0631\u0648\u0627\u0628\u0637 \u0627\u0644\u062a\u062d\u0645\u064a\u0644. \u062d\u0627\u0648\u0644 \u0645\u0631\u0629 \u0623\u062e\u0631\u0649.',
         error_network: '\u062e\u0637\u0623 \u0641\u064a \u0627\u0644\u0634\u0628\u0643\u0629. \u062a\u062d\u0642\u0642 \u0645\u0646 \u0627\u062a\u0635\u0627\u0644\u0643 \u0648\u062d\u0627\u0648\u0644 \u0645\u0631\u0629 \u0623\u062e\u0631\u0649.',
-        detected_suffix: ' \u062a\u0645 \u0627\u0644\u0643\u0634\u0641 \u2014 \u062c\u0627\u0647\u0632 \u0644\u0644\u062a\u062d\u0645\u064a\u0644!'
+        detected_suffix: ' \u062a\u0645 \u0627\u0644\u0643\u0634\u0641 \u2014 \u062c\u0627\u0647\u0632 \u0644\u0644\u062a\u062d\u0645\u064a\u0644!',
+        pwa_install_text: '\u062b\u0628\u0651\u062a \u0627\u0644\u062a\u0637\u0628\u064a\u0642 \u0644\u062a\u062c\u0631\u0628\u0629 \u0623\u0641\u0636\u0644'
     },
     fr: {
         nav_platforms: 'Plateformes',
@@ -95,7 +97,8 @@ var TRANSLATIONS = {
         extracting_video: 'Extraction de la vid\u00e9o...',
         error_extract: 'Impossible d\u2019extraire les liens. Veuillez r\u00e9essayer.',
         error_network: 'Erreur r\u00e9seau. V\u00e9rifiez votre connexion et r\u00e9essayez.',
-        detected_suffix: ' d\u00e9tect\u00e9 \u2014 pr\u00eat \u00e0 t\u00e9l\u00e9charger !'
+        detected_suffix: ' d\u00e9tect\u00e9 \u2014 pr\u00eat \u00e0 t\u00e9l\u00e9charger !',
+        pwa_install_text: 'Installez l\u2019appli pour une meilleure exp\u00e9rience'
     }
 };
 
@@ -623,12 +626,96 @@ function setupFacebookNavIcon() {
     });
 }
 
+// ==================== PWA INSTALL BANNER ====================
+var deferredPrompt = null;
+
+function setupPWAInstallBanner() {
+    var banner = document.getElementById('pwaInstallBanner');
+    var installBtn = document.getElementById('pwaInstallBtn');
+    var closeBtn = document.getElementById('pwaCloseBtn');
+    if (!banner || !installBtn || !closeBtn) return;
+
+    // Don't show if running as installed app (standalone mode)
+    if (window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true) {
+        return;
+    }
+
+    // Don't show on desktop
+    var isMobile = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    if (!isMobile) return;
+
+    // Don't show if user dismissed it this session
+    if (sessionStorage.getItem('nadir_pwa_dismissed')) return;
+
+    // Listen for the beforeinstallprompt event
+    window.addEventListener('beforeinstallprompt', function(e) {
+        e.preventDefault();
+        deferredPrompt = e;
+        showPWABanner();
+    });
+
+    // If no beforeinstallprompt fires (iOS, etc.), still show the banner
+    // iOS doesn't fire beforeinstallprompt, so show after a delay
+    setTimeout(function() {
+        if (!deferredPrompt && !sessionStorage.getItem('nadir_pwa_dismissed')) {
+            // Check if already installed
+            if (!window.matchMedia('(display-mode: standalone)').matches && !window.navigator.standalone) {
+                showPWABanner();
+            }
+        }
+    }, 2000);
+
+    // Install button click
+    installBtn.addEventListener('click', function() {
+        if (deferredPrompt) {
+            deferredPrompt.prompt();
+            deferredPrompt.userChoice.then(function(choiceResult) {
+                if (choiceResult.outcome === 'accepted') {
+                    hidePWABanner();
+                }
+                deferredPrompt = null;
+            });
+        } else {
+            // iOS: show instructions
+            showToast('Tap the Share button then "Add to Home Screen"', 'fas fa-share-square');
+        }
+    });
+
+    // Close button click
+    closeBtn.addEventListener('click', function() {
+        hidePWABanner();
+        sessionStorage.setItem('nadir_pwa_dismissed', '1');
+    });
+}
+
+function showPWABanner() {
+    var banner = document.getElementById('pwaInstallBanner');
+    if (banner) {
+        banner.classList.add('show');
+        document.body.classList.add('pwa-banner-visible');
+    }
+}
+
+function hidePWABanner() {
+    var banner = document.getElementById('pwaInstallBanner');
+    if (banner) {
+        banner.classList.remove('show');
+        document.body.classList.remove('pwa-banner-visible');
+    }
+}
+
+// Register Service Worker
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(function() {});
+}
+
 // Initialize
 document.addEventListener('DOMContentLoaded', function() {
     createParticles();
     setupDeveloperLink();
     setupFacebookNavIcon();
     setupLanguageSwitcher();
+    setupPWAInstallBanner();
     applyLanguage(currentLang);
     urlInput.focus();
 });
