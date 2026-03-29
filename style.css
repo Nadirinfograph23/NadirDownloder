@@ -90,6 +90,99 @@ body {
     }
 }
 
+/* PWA Install Banner */
+.pwa-install-banner {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 150;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    gap: 10px;
+    font-size: 13px;
+}
+
+.pwa-install-banner.show {
+    display: flex;
+}
+
+.pwa-close-btn {
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 14px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    transition: all var(--transition);
+}
+
+.pwa-close-btn:hover {
+    background: var(--bg-card);
+    color: var(--text-primary);
+}
+
+.pwa-text {
+    flex: 1;
+    color: var(--text-secondary);
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.pwa-install-btn {
+    flex-shrink: 0;
+    padding: 7px 16px;
+    background: var(--accent);
+    color: #000;
+    border: none;
+    border-radius: var(--radius-full);
+    font-size: 12px;
+    font-weight: 700;
+    font-family: inherit;
+    cursor: pointer;
+    letter-spacing: 0.5px;
+    transition: all var(--transition);
+    white-space: nowrap;
+}
+
+.pwa-install-btn:hover {
+    background: var(--accent-dark);
+    transform: scale(1.03);
+}
+
+/* Shift navbar down when banner is visible */
+body.pwa-banner-visible .navbar {
+    top: 48px;
+}
+
+body.pwa-banner-visible .hero {
+    padding-top: 168px;
+}
+
+@media (min-width: 769px) {
+    .pwa-install-banner {
+        display: none !important;
+    }
+    body.pwa-banner-visible .navbar {
+        top: 0;
+    }
+    body.pwa-banner-visible .hero {
+        padding-top: 120px;
+    }
+}
+
 /* Navbar */
 .navbar {
     position: fixed;
@@ -959,6 +1052,10 @@ body {
 
     .hero {
         padding: 100px 16px 40px;
+    }
+
+    body.pwa-banner-visible .hero {
+        padding-top: 148px;
     }
 
     .input-wrapper {

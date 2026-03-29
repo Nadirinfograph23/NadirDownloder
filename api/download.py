@@ -41,6 +41,8 @@ def _format_size(filesize):
 
 def extract_video_info(url):
     """Use yt-dlp to extract video info and available formats."""
+    platform = detect_platform(url)
+
     ydl_opts = {
         'quiet': True,
         'no_warnings': True,
@@ -73,19 +75,20 @@ def extract_video_info(url):
                 continue
 
             protocol = f.get('protocol', '')
-            if protocol in ('m3u8', 'm3u8_native', 'dash', 'http_dash_segments'):
+            if protocol in ('m3u8', 'm3u8_native', 'http_dash_segments'):
+                continue
+            # Allow dash protocol for Facebook to capture more formats
+            if protocol == 'dash' and platform != 'facebook':
                 continue
 
             vcodec = f.get('vcodec', 'none')
             acodec = f.get('acodec', 'none')
 
-            if vcodec == 'none':
-                continue
-
             ext = f.get('ext', 'mp4')
             height = f.get('height')
             filesize = f.get('filesize') or f.get('filesize_approx')
             has_audio = acodec != 'none'
+            has_video = vcodec != 'none'
 
             entry = {
                 'url': f_url,
@@ -93,14 +96,16 @@ def extract_video_info(url):
                 'ext': ext,
                 'filesize': filesize,
                 'has_audio': has_audio,
+                'has_video': has_video,
                 'format_note': f.get('format_note', ''),
                 'tbr': f.get('tbr') or 0,
+                'abr': f.get('abr') or 0,
             }
             seen_urls.add(f_url)
 
-            if has_audio:
+            if has_video and has_audio:
                 muxed_formats.append(entry)
-            else:
+            elif has_video and not has_audio:
                 video_only.append(entry)
 
         # Build links: prefer muxed (audio+video) formats
@@ -127,8 +132,9 @@ def extract_video_info(url):
                 'size': _format_size(vf['filesize']),
             })
 
-        # If we have fewer than 3 muxed options, add video-only for higher resolutions
-        if len(links) < 3:
+        # For Facebook: never add video-only formats (they have no audio).
+        # For other platforms: add video-only as fallback if fewer than 3 muxed.
+        if platform != 'facebook' and len(links) < 3:
             video_only.sort(
                 key=lambda x: (x['height'] or 0, x['ext'] == 'mp4', x['tbr']),
                 reverse=True,
@@ -173,6 +179,21 @@ def extract_video_info(url):
                         'format': rf.get('ext', 'mp4'),
                         'size': '',
                     })
+
+        # Facebook-specific fallback: try direct SD/HD URLs from info dict.
+        if not links and platform == 'facebook':
+            # Try the direct webpage URLs (sd_url / hd_url) that Facebook
+            # sometimes exposes — these are typically muxed.
+            for key in ('sd_url', 'hd_url'):
+                direct_url = info.get(key)
+                if direct_url and direct_url not in seen_urls:
+                    links.append({
+                        'url': direct_url,
+                        'quality': 'HD' if 'hd' in key else 'SD',
+                        'format': 'mp4',
+                        'size': '',
+                    })
+                    seen_urls.add(direct_url)
 
         if not links:
             return {'success': False, 'error': 'No downloadable video formats found.'}
