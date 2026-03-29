@@ -67,7 +67,6 @@ def extract_video_info(url):
         # Separate formats into categories
         muxed_formats = []   # has both video + audio
         video_only = []      # video only (no audio)
-        audio_only = []      # audio only (no video)
         seen_urls = set()
 
         for f in formats:
@@ -108,8 +107,6 @@ def extract_video_info(url):
                 muxed_formats.append(entry)
             elif has_video and not has_audio:
                 video_only.append(entry)
-            elif has_audio and not has_video:
-                audio_only.append(entry)
 
         # Build links: prefer muxed (audio+video) formats
         links = []
@@ -136,8 +133,6 @@ def extract_video_info(url):
             })
 
         # For Facebook: never add video-only formats (they have no audio).
-        # Instead, if we have no muxed formats, try to find a best audio stream
-        # and pair it with the best video-only stream for client-side info.
         # For other platforms: add video-only as fallback if fewer than 3 muxed.
         if platform != 'facebook' and len(links) < 3:
             video_only.sort(
@@ -185,9 +180,7 @@ def extract_video_info(url):
                         'size': '',
                     })
 
-        # Facebook-specific fallback: if still no links, use video-only with
-        # the best audio URL so the frontend can inform the user.
-        # Also try to use the direct SD/HD URLs from the info dict.
+        # Facebook-specific fallback: try direct SD/HD URLs from info dict.
         if not links and platform == 'facebook':
             # Try the direct webpage URLs (sd_url / hd_url) that Facebook
             # sometimes exposes — these are typically muxed.
