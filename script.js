@@ -36,7 +36,10 @@ var TRANSLATIONS = {
         error_extract: 'Could not extract download links. Please try again.',
         error_network: 'Network error. Please check your connection and try again.',
         detected_suffix: ' detected \u2014 ready to download!',
-        pwa_install_text: 'Install app for a better experience'
+        pwa_install_text: 'Install app for a better experience',
+        toast_downloading: 'Downloading video...',
+        toast_download_started: 'Download started!',
+        toast_download_failed: 'Direct download failed, opening video...'
     },
     ar: {
         nav_platforms: '\u0627\u0644\u0645\u0646\u0635\u0627\u062a',
@@ -67,7 +70,10 @@ var TRANSLATIONS = {
         error_extract: '\u062a\u0639\u0630\u0631 \u0627\u0633\u062a\u062e\u0631\u0627\u062c \u0631\u0648\u0627\u0628\u0637 \u0627\u0644\u062a\u062d\u0645\u064a\u0644. \u062d\u0627\u0648\u0644 \u0645\u0631\u0629 \u0623\u062e\u0631\u0649.',
         error_network: '\u062e\u0637\u0623 \u0641\u064a \u0627\u0644\u0634\u0628\u0643\u0629. \u062a\u062d\u0642\u0642 \u0645\u0646 \u0627\u062a\u0635\u0627\u0644\u0643 \u0648\u062d\u0627\u0648\u0644 \u0645\u0631\u0629 \u0623\u062e\u0631\u0649.',
         detected_suffix: ' \u062a\u0645 \u0627\u0644\u0643\u0634\u0641 \u2014 \u062c\u0627\u0647\u0632 \u0644\u0644\u062a\u062d\u0645\u064a\u0644!',
-        pwa_install_text: '\u062b\u0628\u0651\u062a \u0627\u0644\u062a\u0637\u0628\u064a\u0642 \u0644\u062a\u062c\u0631\u0628\u0629 \u0623\u0641\u0636\u0644'
+        pwa_install_text: '\u062b\u0628\u0651\u062a \u0627\u0644\u062a\u0637\u0628\u064a\u0642 \u0644\u062a\u062c\u0631\u0628\u0629 \u0623\u0641\u0636\u0644',
+        toast_downloading: '\u062c\u0627\u0631\u064a \u062a\u062d\u0645\u064a\u0644 \u0627\u0644\u0641\u064a\u062f\u064a\u0648...',
+        toast_download_started: '\u0628\u062f\u0623 \u0627\u0644\u062a\u062d\u0645\u064a\u0644!',
+        toast_download_failed: '\u0641\u0634\u0644 \u0627\u0644\u062a\u062d\u0645\u064a\u0644 \u0627\u0644\u0645\u0628\u0627\u0634\u0631\u060c \u062c\u0627\u0631\u064a \u0641\u062a\u062d \u0627\u0644\u0641\u064a\u062f\u064a\u0648...'
     },
     fr: {
         nav_platforms: 'Plateformes',
@@ -98,7 +104,10 @@ var TRANSLATIONS = {
         error_extract: 'Impossible d\u2019extraire les liens. Veuillez r\u00e9essayer.',
         error_network: 'Erreur r\u00e9seau. V\u00e9rifiez votre connexion et r\u00e9essayez.',
         detected_suffix: ' d\u00e9tect\u00e9 \u2014 pr\u00eat \u00e0 t\u00e9l\u00e9charger !',
-        pwa_install_text: 'Installez l\u2019appli pour une meilleure exp\u00e9rience'
+        pwa_install_text: 'Installez l\u2019appli pour une meilleure exp\u00e9rience',
+        toast_downloading: 'Téléchargement de la vidéo...',
+        toast_download_started: 'Téléchargement commencé !',
+        toast_download_failed: 'Échec du téléchargement direct, ouverture de la vidéo...'
     }
 };
 
@@ -417,7 +426,10 @@ function showResults(data, platform) {
         var sizeLabel = link.size ? ' - ' + link.size : '';
         var btnClass = index === 0 ? 'preview-download-btn' : 'preview-download-btn secondary';
 
-        html += '<a href="' + escapeHtml(link.url) + '" class="' + btnClass + '" download rel="noopener noreferrer">';
+        var filename = (data.title || 'video').replace(/[^a-zA-Z0-9_\-\s]/g, '').trim().replace(/\s+/g, '_');
+        filename = filename + '_' + qualityLabel + '.' + (link.format || 'mp4').toLowerCase();
+
+        html += '<a href="' + escapeHtml(link.url) + '" class="' + btnClass + '" data-filename="' + escapeHtml(filename) + '" download="' + escapeHtml(filename) + '" rel="noopener noreferrer">';
         html += '  <div class="dl-info">';
         html += '    <i class="fas fa-download"></i>';
         html += '    <span>' + escapeHtml(qualityLabel) + escapeHtml(sizeLabel) + '</span>';
@@ -426,6 +438,35 @@ function showResults(data, platform) {
         html += '</a>';
     });
     previewDownloads.innerHTML = html;
+}
+
+// Force download video as blob to trigger direct download
+function forceDownload(videoUrl, filename) {
+    showToast(t('toast_downloading'), 'fas fa-spinner fa-spin');
+
+    fetch(videoUrl)
+        .then(function(response) {
+            if (!response.ok) throw new Error('Network error');
+            return response.blob();
+        })
+        .then(function(blob) {
+            var blobUrl = URL.createObjectURL(blob);
+            var a = document.createElement('a');
+            a.href = blobUrl;
+            a.download = filename || 'video.mp4';
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(function() {
+                document.body.removeChild(a);
+                URL.revokeObjectURL(blobUrl);
+            }, 100);
+            showToast(t('toast_download_started'), 'fas fa-check');
+        })
+        .catch(function() {
+            // Fallback: open URL directly (browser may play or download)
+            showToast(t('toast_download_failed'), 'fas fa-exclamation-triangle');
+            window.open(videoUrl, '_blank');
+        });
 }
 
 // Hide results
@@ -536,6 +577,17 @@ urlInput.addEventListener('paste', function() {
 
 downloadBtn.addEventListener('click', handleDownload);
 pasteBtn.addEventListener('click', handlePaste);
+
+// Intercept download button clicks to force direct download
+previewDownloads.addEventListener('click', function(e) {
+    var link = e.target.closest('.preview-download-btn');
+    if (!link) return;
+    e.preventDefault();
+
+    var videoUrl = link.getAttribute('href');
+    var filename = link.getAttribute('data-filename') || 'video.mp4';
+    forceDownload(videoUrl, filename);
+});
 
 // Enter key to download
 urlInput.addEventListener('keydown', function(e) {
