@@ -224,6 +224,12 @@ class handler(BaseHTTPRequestHandler):
                 },
             }
 
+            # When format_id contains '+' (e.g. video+audio merge),
+            # tell yt-dlp to produce an mp4 container so ffmpeg merges
+            # the separate HLS streams into a single file with audio.
+            if '+' in format_id:
+                ydl_opts['merge_output_format'] = 'mp4'
+
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([video_url])
 

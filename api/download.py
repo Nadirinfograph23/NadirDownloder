@@ -86,8 +86,13 @@ def extract_video_info(url):
                 continue
 
             protocol = f.get('protocol', '')
+            # Pinterest now only provides HLS (m3u8_native) streams.
+            # We skip HLS for other platforms but allow it for Pinterest
+            # so we can build combined video+audio format_ids for the
+            # yt-dlp proxy to download and merge.
             if protocol in ('m3u8', 'm3u8_native', 'http_dash_segments'):
-                continue
+                if platform != 'pinterest':
+                    continue
             # Allow dash protocol for Facebook and Instagram to capture more formats
             if protocol == 'dash' and platform not in ('facebook', 'instagram', 'tiktok', 'pinterest'):
                 continue
@@ -155,7 +160,19 @@ def extract_video_info(url):
 
         # For Pinterest: video-only formats are fine because the proxy uses
         # yt-dlp internally which merges audio + video automatically.
+        # For HLS streams we build a combined format_id (video+audio) so
+        # the proxy tells yt-dlp to merge both tracks into a single file.
         if platform == 'pinterest' and not links:
+            # Find the HLS audio format_id (if any) so we can combine it
+            # with each video format_id for a proper video+audio download.
+            pinterest_audio_id = None
+            for f in formats:
+                if (f.get('vcodec', 'none') == 'none'
+                        and f.get('format_id', '').lower().startswith('v_hlsv3')
+                        and 'audio' in f.get('format_id', '').lower()):
+                    pinterest_audio_id = f['format_id']
+                    break
+
             video_only.sort(
                 key=lambda x: (x['height'] or 0, x['ext'] == 'mp4', x['tbr']),
                 reverse=True,
@@ -173,8 +190,13 @@ def extract_video_info(url):
                     'format': vf['ext'] if vf['ext'] in ('mp4', 'webm', 'mkv') else 'mp4',
                     'size': _format_size(vf['filesize']),
                 }
-                if vf.get('format_id'):
-                    link_entry['format_id'] = vf['format_id']
+                # Combine video + audio format_ids so the yt-dlp proxy
+                # merges both tracks (e.g. "V_HLSV3_MOBILE-2403+V_HLSV3_MOBILE-audio1-1").
+                vid_id = vf.get('format_id', '')
+                if vid_id and pinterest_audio_id:
+                    link_entry['format_id'] = f"{vid_id}+{pinterest_audio_id}"
+                elif vid_id:
+                    link_entry['format_id'] = vid_id
                 links.append(link_entry)
 
         # For Facebook, Instagram, and TikTok: never add video-only
