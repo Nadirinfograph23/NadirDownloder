@@ -101,6 +101,12 @@ def extract_video_info(url):
             has_audio = acodec != 'none'
             has_video = vcodec != 'none'
 
+            # Pinterest V_720P format reports vcodec=None / acodec=None
+            # but is actually a muxed direct MP4.  Treat it as muxed.
+            if not has_video and not has_audio and ext == 'mp4' and height:
+                has_video = True
+                has_audio = True
+
             entry = {
                 'url': f_url,
                 'height': height,
@@ -147,7 +153,31 @@ def extract_video_info(url):
                 link_entry['format_id'] = vf['format_id']
             links.append(link_entry)
 
-        # For Facebook, Instagram, TikTok, and Pinterest: never add video-only
+        # For Pinterest: video-only formats are fine because the proxy uses
+        # yt-dlp internally which merges audio + video automatically.
+        if platform == 'pinterest' and not links:
+            video_only.sort(
+                key=lambda x: (x['height'] or 0, x['ext'] == 'mp4', x['tbr']),
+                reverse=True,
+            )
+            for vf in video_only:
+                h = vf['height']
+                if h in seen_heights:
+                    continue
+                seen_heights.add(h)
+
+                label = f"{h}p" if h else vf['format_note'] or 'Video'
+                link_entry = {
+                    'url': vf['url'],
+                    'quality': label,
+                    'format': vf['ext'] if vf['ext'] in ('mp4', 'webm', 'mkv') else 'mp4',
+                    'size': _format_size(vf['filesize']),
+                }
+                if vf.get('format_id'):
+                    link_entry['format_id'] = vf['format_id']
+                links.append(link_entry)
+
+        # For Facebook, Instagram, and TikTok: never add video-only
         # formats (they have no audio and would produce silent videos).
         # For other platforms: add video-only as fallback if fewer than 3 muxed.
         if platform not in ('facebook', 'instagram', 'tiktok', 'pinterest') and len(links) < 3:
