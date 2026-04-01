@@ -417,18 +417,23 @@ function showResults(data, platform) {
         var sizeLabel = link.size ? ' - ' + link.size : '';
         var btnClass = index === 0 ? 'preview-download-btn' : 'preview-download-btn secondary';
 
-        // Route downloads through our server-side proxy so that
-        // platform-specific headers (Referer, cookies, etc.) are sent
-        // correctly.  Direct <a href="CDN_URL"> links fail on platforms
-        // like TikTok because the browser doesn't attach these headers.
-        var safeTitle = (data.title || 'video').replace(/[^\w\s\-]/g, '').trim().substring(0, 60) || 'video';
-        var proxyUrl = '/api/proxy'
-            + '?url=' + encodeURIComponent(link.url)
-            + '&platform=' + encodeURIComponent(platform)
-            + '&filename=' + encodeURIComponent(safeTitle)
-            + '&format=' + encodeURIComponent(link.format || 'mp4');
+        // Platforms whose CDN URLs need server-side headers (Referer,
+        // cookies) that the browser won't attach on a plain <a> click.
+        // For these we route through /api/proxy; others use direct links.
+        var needsProxy = ['tiktok', 'facebook', 'instagram', 'twitter'];
+        var downloadHref;
+        if (needsProxy.indexOf(platform) !== -1) {
+            var safeTitle = (data.title || 'video').replace(/[^\w\s\-]/g, '').trim().substring(0, 60) || 'video';
+            downloadHref = '/api/proxy'
+                + '?url=' + encodeURIComponent(link.url)
+                + '&platform=' + encodeURIComponent(platform)
+                + '&filename=' + encodeURIComponent(safeTitle)
+                + '&format=' + encodeURIComponent(link.format || 'mp4');
+        } else {
+            downloadHref = link.url;
+        }
 
-        html += '<a href="' + escapeHtml(proxyUrl) + '" class="' + btnClass + '" download rel="noopener noreferrer">';
+        html += '<a href="' + escapeHtml(downloadHref) + '" class="' + btnClass + '" download rel="noopener noreferrer">';
         html += '  <div class="dl-info">';
         html += '    <i class="fas fa-download"></i>';
         html += '    <span>' + escapeHtml(qualityLabel) + escapeHtml(sizeLabel) + '</span>';

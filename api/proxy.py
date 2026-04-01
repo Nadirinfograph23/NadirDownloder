@@ -16,19 +16,20 @@ import re
 # Hobby plan.  We cap slightly below that to leave room for headers.
 MAX_PROXY_BYTES = 50 * 1024 * 1024  # 50 MB generous cap; Vercel will enforce its own limit
 
-# Per-platform: allowed CDN domain patterns and the HTTP headers we need
-# to forward when fetching the video.
+# Platforms whose CDN URLs require server-side headers to download.
+# Only these platforms are proxied; others use direct links.
+# Domain patterns are anchored so that e.g. "evil-tiktokcdn.com" won't match.
 PLATFORM_CONFIG = {
     'tiktok': {
         'domain_patterns': [
-            r'tiktokcdn\.com',
-            r'tiktok\.com',
-            r'tiktokv\.com',
-            r'tiktokcdn-us\.com',
-            r'musical\.ly',
-            r'byteoversea\.com',
-            r'ibytedtos\.com',
-            r'ibyteimg\.com',
+            r'(^|\.)tiktokcdn\.com$',
+            r'(^|\.)tiktok\.com$',
+            r'(^|\.)tiktokv\.com$',
+            r'(^|\.)tiktokcdn-us\.com$',
+            r'(^|\.)musical\.ly$',
+            r'(^|\.)byteoversea\.com$',
+            r'(^|\.)ibytedtos\.com$',
+            r'(^|\.)ibyteimg\.com$',
         ],
         'headers': {
             'User-Agent': (
@@ -42,12 +43,12 @@ PLATFORM_CONFIG = {
     },
     'facebook': {
         'domain_patterns': [
-            r'fbcdn\.net',
-            r'facebook\.com',
-            r'fbcdn\.com',
-            r'fb\.com',
-            r'fbsbx\.com',
-            r'fbpigeon\.com',
+            r'(^|\.)fbcdn\.net$',
+            r'(^|\.)facebook\.com$',
+            r'(^|\.)fbcdn\.com$',
+            r'(^|\.)fb\.com$',
+            r'(^|\.)fbsbx\.com$',
+            r'(^|\.)fbpigeon\.com$',
         ],
         'headers': {
             'User-Agent': (
@@ -59,9 +60,9 @@ PLATFORM_CONFIG = {
     },
     'instagram': {
         'domain_patterns': [
-            r'cdninstagram\.com',
-            r'instagram\.com',
-            r'fbcdn\.net',
+            r'(^|\.)cdninstagram\.com$',
+            r'(^|\.)instagram\.com$',
+            r'(^|\.)fbcdn\.net$',
         ],
         'headers': {
             'User-Agent': (
@@ -73,24 +74,8 @@ PLATFORM_CONFIG = {
     },
     'pinterest': {
         'domain_patterns': [
-            r'pinimg\.com',
-            r'pinterest\.com',
-        ],
-        'headers': {
-            'User-Agent': (
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                'AppleWebKit/537.36 (KHTML, like Gecko) '
-                'Chrome/120.0.0.0 Safari/537.36'
-            ),
-        },
-    },
-    'youtube': {
-        'domain_patterns': [
-            r'googlevideo\.com',
-            r'youtube\.com',
-            r'ytimg\.com',
-            r'ggpht\.com',
-            r'googleusercontent\.com',
+            r'(^|\.)pinimg\.com$',
+            r'(^|\.)pinterest\.com$',
         ],
         'headers': {
             'User-Agent': (
@@ -102,9 +87,9 @@ PLATFORM_CONFIG = {
     },
     'twitter': {
         'domain_patterns': [
-            r'twimg\.com',
-            r'twitter\.com',
-            r'x\.com',
+            r'(^|\.)twimg\.com$',
+            r'(^|\.)twitter\.com$',
+            r'(^|\.)x\.com$',
         ],
         'headers': {
             'User-Agent': (
