@@ -3,12 +3,20 @@
     {
       "source": "/api/download",
       "destination": "/api/download"
+    },
+    {
+      "source": "/api/proxy",
+      "destination": "/api/proxy"
     }
   ],
   "functions": {
     "api/download.py": {
       "runtime": "@vercel/python@4.5.0",
       "maxDuration": 30
+    },
+    "api/proxy.py": {
+      "runtime": "@vercel/python@4.5.0",
+      "maxDuration": 60
     }
   }
 }
