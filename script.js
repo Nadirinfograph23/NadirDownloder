@@ -420,9 +420,21 @@ function showResults(data, platform) {
         // Platforms whose CDN URLs need server-side headers (Referer,
         // cookies) that the browser won't attach on a plain <a> click.
         // For these we route through /api/proxy; others use direct links.
-        var needsProxy = ['tiktok', 'facebook', 'instagram', 'twitter'];
+        var needsProxy = ['tiktok', 'facebook', 'instagram', 'twitter', 'pinterest'];
         var downloadHref;
-        if (needsProxy.indexOf(platform) !== -1) {
+        // TikTok & Pinterest CDN URLs require yt-dlp to download
+        // (cookies / auth handled internally); pass the original page
+        // URL + format_id so the proxy can use yt-dlp.
+        var ytdlpPlatforms = ['tiktok', 'pinterest'];
+        if (ytdlpPlatforms.indexOf(platform) !== -1 && data.original_url && link.format_id) {
+            var safeTitle = (data.title || 'video').replace(/[^\w\s\-]/g, '').trim().substring(0, 60) || 'video';
+            downloadHref = '/api/proxy'
+                + '?url=' + encodeURIComponent(data.original_url)
+                + '&platform=' + encodeURIComponent(platform)
+                + '&format_id=' + encodeURIComponent(link.format_id)
+                + '&filename=' + encodeURIComponent(safeTitle)
+                + '&format=' + encodeURIComponent(link.format || 'mp4');
+        } else if (needsProxy.indexOf(platform) !== -1) {
             var safeTitle = (data.title || 'video').replace(/[^\w\s\-]/g, '').trim().substring(0, 60) || 'video';
             downloadHref = '/api/proxy'
                 + '?url=' + encodeURIComponent(link.url)

@@ -101,6 +101,12 @@ def extract_video_info(url):
             has_audio = acodec != 'none'
             has_video = vcodec != 'none'
 
+            # Pinterest V_720P format reports vcodec=None / acodec=None
+            # but is actually a muxed direct MP4.  Treat it as muxed.
+            if not has_video and not has_audio and ext == 'mp4' and height:
+                has_video = True
+                has_audio = True
+
             entry = {
                 'url': f_url,
                 'height': height,
@@ -111,6 +117,7 @@ def extract_video_info(url):
                 'format_note': f.get('format_note', ''),
                 'tbr': f.get('tbr') or 0,
                 'abr': f.get('abr') or 0,
+                'format_id': f.get('format_id', ''),
             }
             seen_urls.add(f_url)
 
@@ -136,14 +143,41 @@ def extract_video_info(url):
             seen_heights.add(h)
 
             label = f"{h}p" if h else vf['format_note'] or 'Video'
-            links.append({
+            link_entry = {
                 'url': vf['url'],
                 'quality': label,
                 'format': vf['ext'] if vf['ext'] in ('mp4', 'webm', 'mkv') else 'mp4',
                 'size': _format_size(vf['filesize']),
-            })
+            }
+            if vf.get('format_id'):
+                link_entry['format_id'] = vf['format_id']
+            links.append(link_entry)
 
-        # For Facebook, Instagram, TikTok, and Pinterest: never add video-only
+        # For Pinterest: video-only formats are fine because the proxy uses
+        # yt-dlp internally which merges audio + video automatically.
+        if platform == 'pinterest' and not links:
+            video_only.sort(
+                key=lambda x: (x['height'] or 0, x['ext'] == 'mp4', x['tbr']),
+                reverse=True,
+            )
+            for vf in video_only:
+                h = vf['height']
+                if h in seen_heights:
+                    continue
+                seen_heights.add(h)
+
+                label = f"{h}p" if h else vf['format_note'] or 'Video'
+                link_entry = {
+                    'url': vf['url'],
+                    'quality': label,
+                    'format': vf['ext'] if vf['ext'] in ('mp4', 'webm', 'mkv') else 'mp4',
+                    'size': _format_size(vf['filesize']),
+                }
+                if vf.get('format_id'):
+                    link_entry['format_id'] = vf['format_id']
+                links.append(link_entry)
+
+        # For Facebook, Instagram, and TikTok: never add video-only
         # formats (they have no audio and would produce silent videos).
         # For other platforms: add video-only as fallback if fewer than 3 muxed.
         if platform not in ('facebook', 'instagram', 'tiktok', 'pinterest') and len(links) < 3:
@@ -158,12 +192,15 @@ def extract_video_info(url):
                 seen_heights.add(h)
 
                 label = f"{h}p" if h else vf['format_note'] or 'Video'
-                links.append({
+                link_entry = {
                     'url': vf['url'],
                     'quality': label,
                     'format': vf['ext'] if vf['ext'] in ('mp4', 'webm', 'mkv') else 'mp4',
                     'size': _format_size(vf['filesize']),
-                })
+                }
+                if vf.get('format_id'):
+                    link_entry['format_id'] = vf['format_id']
+                links.append(link_entry)
 
         # Re-sort all links by resolution descending
         links.sort(
@@ -173,12 +210,15 @@ def extract_video_info(url):
 
         # Fallback: use the main URL if no formats were extracted
         if not links and info.get('url'):
-            links.append({
+            fallback_entry = {
                 'url': info['url'],
                 'quality': 'Best Quality',
                 'format': info.get('ext', 'mp4'),
                 'size': '',
-            })
+            }
+            if info.get('format_id'):
+                fallback_entry['format_id'] = info['format_id']
+            links.append(fallback_entry)
 
         # Fallback: try requested_formats (used by yt-dlp for merged formats)
         if not links and info.get('requested_formats'):
@@ -196,12 +236,15 @@ def extract_video_info(url):
                     continue
                 if rf_has_video:
                     label = f"{rf.get('height')}p" if rf.get('height') else 'Best'
-                    links.append({
+                    rf_entry = {
                         'url': rf_url,
                         'quality': label,
                         'format': rf.get('ext', 'mp4'),
                         'size': _format_size(rf.get('filesize') or rf.get('filesize_approx')),
-                    })
+                    }
+                    if rf.get('format_id'):
+                        rf_entry['format_id'] = rf['format_id']
+                    links.append(rf_entry)
 
         # Instagram-specific fallback: use the main video URL which is usually muxed.
         if not links and platform == 'instagram' and info.get('url'):
@@ -224,12 +267,15 @@ def extract_video_info(url):
             if main_url not in seen_urls:
                 height = info.get('height')
                 label = f"{height}p" if height else 'Best Quality'
-                links.append({
+                tk_entry = {
                     'url': main_url,
                     'quality': label,
                     'format': info.get('ext', 'mp4'),
                     'size': _format_size(info.get('filesize') or info.get('filesize_approx')),
-                })
+                }
+                if info.get('format_id'):
+                    tk_entry['format_id'] = info['format_id']
+                links.append(tk_entry)
                 seen_urls.add(main_url)
 
         # Pinterest-specific fallback: use the main video URL which is
@@ -239,12 +285,15 @@ def extract_video_info(url):
             if main_url not in seen_urls:
                 height = info.get('height')
                 label = f"{height}p" if height else 'Best Quality'
-                links.append({
+                pin_entry = {
                     'url': main_url,
                     'quality': label,
                     'format': info.get('ext', 'mp4'),
                     'size': _format_size(info.get('filesize') or info.get('filesize_approx')),
-                })
+                }
+                if info.get('format_id'):
+                    pin_entry['format_id'] = info['format_id']
+                links.append(pin_entry)
                 seen_urls.add(main_url)
 
         # Facebook-specific fallback: try direct SD/HD URLs from info dict.
@@ -273,6 +322,7 @@ def extract_video_info(url):
             'title': title,
             'thumbnail': thumbnail,
             'links': links,
+            'original_url': url,
         }
 
         if duration:
