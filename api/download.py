@@ -52,6 +52,17 @@ def extract_video_info(url):
         'extractor_retries': 2,
     }
 
+    # TikTok needs specific headers to return valid download URLs
+    if platform == 'tiktok':
+        ydl_opts['http_headers'] = {
+            'User-Agent': (
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/120.0.0.0 Safari/537.36'
+            ),
+            'Referer': 'https://www.tiktok.com/',
+        }
+
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -78,7 +89,7 @@ def extract_video_info(url):
             if protocol in ('m3u8', 'm3u8_native', 'http_dash_segments'):
                 continue
             # Allow dash protocol for Facebook and Instagram to capture more formats
-            if protocol == 'dash' and platform not in ('facebook', 'instagram'):
+            if protocol == 'dash' and platform not in ('facebook', 'instagram', 'tiktok', 'pinterest'):
                 continue
 
             vcodec = f.get('vcodec', 'none')
@@ -132,9 +143,10 @@ def extract_video_info(url):
                 'size': _format_size(vf['filesize']),
             })
 
-        # For Facebook and Instagram: never add video-only formats (they have no audio).
+        # For Facebook, Instagram, TikTok, and Pinterest: never add video-only
+        # formats (they have no audio and would produce silent videos).
         # For other platforms: add video-only as fallback if fewer than 3 muxed.
-        if platform not in ('facebook', 'instagram') and len(links) < 3:
+        if platform not in ('facebook', 'instagram', 'tiktok', 'pinterest') and len(links) < 3:
             video_only.sort(
                 key=lambda x: (x['height'] or 0, x['ext'] == 'mp4', x['tbr']),
                 reverse=True,
@@ -180,7 +192,7 @@ def extract_video_info(url):
                 rf_has_audio = rf_acodec != 'none'
                 # Skip audio-only or video-only streams for Instagram;
                 # only include formats that have both video and audio.
-                if platform == 'instagram' and not (rf_has_video and rf_has_audio):
+                if platform in ('instagram', 'tiktok', 'pinterest') and not (rf_has_video and rf_has_audio):
                     continue
                 if rf_has_video:
                     label = f"{rf.get('height')}p" if rf.get('height') else 'Best'
@@ -193,6 +205,36 @@ def extract_video_info(url):
 
         # Instagram-specific fallback: use the main video URL which is usually muxed.
         if not links and platform == 'instagram' and info.get('url'):
+            main_url = info['url']
+            if main_url not in seen_urls:
+                height = info.get('height')
+                label = f"{height}p" if height else 'Best Quality'
+                links.append({
+                    'url': main_url,
+                    'quality': label,
+                    'format': info.get('ext', 'mp4'),
+                    'size': _format_size(info.get('filesize') or info.get('filesize_approx')),
+                })
+                seen_urls.add(main_url)
+
+        # TikTok-specific fallback: the main URL from yt-dlp is usually a
+        # muxed (video+audio) stream that works well for direct download.
+        if not links and platform == 'tiktok' and info.get('url'):
+            main_url = info['url']
+            if main_url not in seen_urls:
+                height = info.get('height')
+                label = f"{height}p" if height else 'Best Quality'
+                links.append({
+                    'url': main_url,
+                    'quality': label,
+                    'format': info.get('ext', 'mp4'),
+                    'size': _format_size(info.get('filesize') or info.get('filesize_approx')),
+                })
+                seen_urls.add(main_url)
+
+        # Pinterest-specific fallback: use the main video URL which is
+        # typically a muxed stream with both video and audio.
+        if not links and platform == 'pinterest' and info.get('url'):
             main_url = info['url']
             if main_url not in seen_urls:
                 height = info.get('height')
