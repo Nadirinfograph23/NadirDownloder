@@ -420,7 +420,9 @@ function showResults(data, platform) {
         // Platforms whose CDN URLs need server-side headers (Referer,
         // cookies) that the browser won't attach on a plain <a> click.
         // For these we route through /api/proxy; others use direct links.
-        var needsProxy = ['tiktok', 'facebook', 'instagram', 'twitter', 'pinterest'];
+        // Pinterest uses direct pinimg.com CDN URLs that don't need
+        // special headers and work fine as direct browser downloads.
+        var needsProxy = ['tiktok', 'facebook', 'instagram', 'twitter'];
         var downloadHref;
         // TikTok CDN URLs require yt-dlp to download (cookies / auth
         // handled internally); pass the original page URL + format_id
