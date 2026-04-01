@@ -21,7 +21,7 @@ MAX_PROXY_BYTES = 50 * 1024 * 1024  # 50 MB generous cap; Vercel will enforce it
 
 # Platforms that need yt-dlp to download (CDN URLs require cookies /
 # auth tokens that only yt-dlp can manage internally).
-YTDLP_PLATFORMS = {'tiktok', 'pinterest'}
+YTDLP_PLATFORMS = {'tiktok'}
 
 # Platforms whose CDN URLs require server-side headers to download.
 # Only these platforms are proxied; others use direct links.
@@ -223,12 +223,6 @@ class handler(BaseHTTPRequestHandler):
                     'Referer': f'https://www.{platform}.com/',
                 },
             }
-
-            # When format_id contains '+' (e.g. video+audio merge),
-            # tell yt-dlp to produce an mp4 container so ffmpeg merges
-            # the separate HLS streams into a single file with audio.
-            if '+' in format_id:
-                ydl_opts['merge_output_format'] = 'mp4'
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([video_url])
