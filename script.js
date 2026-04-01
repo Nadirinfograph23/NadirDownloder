@@ -422,10 +422,10 @@ function showResults(data, platform) {
         // For these we route through /api/proxy; others use direct links.
         var needsProxy = ['tiktok', 'facebook', 'instagram', 'twitter', 'pinterest'];
         var downloadHref;
-        // TikTok & Pinterest CDN URLs require yt-dlp to download
-        // (cookies / auth handled internally); pass the original page
-        // URL + format_id so the proxy can use yt-dlp.
-        var ytdlpPlatforms = ['tiktok', 'pinterest'];
+        // TikTok CDN URLs require yt-dlp to download (cookies / auth
+        // handled internally); pass the original page URL + format_id
+        // so the proxy can use yt-dlp.
+        var ytdlpPlatforms = ['tiktok'];
         if (ytdlpPlatforms.indexOf(platform) !== -1 && data.original_url && link.format_id) {
             var safeTitle = (data.title || 'video').replace(/[^\w\s\-]/g, '').trim().substring(0, 60) || 'video';
             downloadHref = '/api/proxy'
