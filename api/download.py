@@ -180,12 +180,15 @@ def extract_video_info(url):
 
         # Fallback: use the main URL if no formats were extracted
         if not links and info.get('url'):
-            links.append({
+            fallback_entry = {
                 'url': info['url'],
                 'quality': 'Best Quality',
                 'format': info.get('ext', 'mp4'),
                 'size': '',
-            })
+            }
+            if info.get('format_id'):
+                fallback_entry['format_id'] = info['format_id']
+            links.append(fallback_entry)
 
         # Fallback: try requested_formats (used by yt-dlp for merged formats)
         if not links and info.get('requested_formats'):
@@ -203,12 +206,15 @@ def extract_video_info(url):
                     continue
                 if rf_has_video:
                     label = f"{rf.get('height')}p" if rf.get('height') else 'Best'
-                    links.append({
+                    rf_entry = {
                         'url': rf_url,
                         'quality': label,
                         'format': rf.get('ext', 'mp4'),
                         'size': _format_size(rf.get('filesize') or rf.get('filesize_approx')),
-                    })
+                    }
+                    if rf.get('format_id'):
+                        rf_entry['format_id'] = rf['format_id']
+                    links.append(rf_entry)
 
         # Instagram-specific fallback: use the main video URL which is usually muxed.
         if not links and platform == 'instagram' and info.get('url'):
@@ -231,12 +237,15 @@ def extract_video_info(url):
             if main_url not in seen_urls:
                 height = info.get('height')
                 label = f"{height}p" if height else 'Best Quality'
-                links.append({
+                tk_entry = {
                     'url': main_url,
                     'quality': label,
                     'format': info.get('ext', 'mp4'),
                     'size': _format_size(info.get('filesize') or info.get('filesize_approx')),
-                })
+                }
+                if info.get('format_id'):
+                    tk_entry['format_id'] = info['format_id']
+                links.append(tk_entry)
                 seen_urls.add(main_url)
 
         # Pinterest-specific fallback: use the main video URL which is
@@ -246,12 +255,15 @@ def extract_video_info(url):
             if main_url not in seen_urls:
                 height = info.get('height')
                 label = f"{height}p" if height else 'Best Quality'
-                links.append({
+                pin_entry = {
                     'url': main_url,
                     'quality': label,
                     'format': info.get('ext', 'mp4'),
                     'size': _format_size(info.get('filesize') or info.get('filesize_approx')),
-                })
+                }
+                if info.get('format_id'):
+                    pin_entry['format_id'] = info['format_id']
+                links.append(pin_entry)
                 seen_urls.add(main_url)
 
         # Facebook-specific fallback: try direct SD/HD URLs from info dict.
