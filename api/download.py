@@ -296,6 +296,31 @@ def extract_video_info(url):
                 links.append(pin_entry)
                 seen_urls.add(main_url)
 
+        # Pinterest HLS-only fallback: many Pinterest videos only have HLS
+        # (m3u8) streams which are filtered out above.  Since the proxy uses
+        # yt-dlp internally (which handles HLS natively and merges
+        # audio+video), we can offer a download using yt-dlp's own best
+        # format selection via the top-level format_id.
+        if not links and platform == 'pinterest' and info.get('format_id'):
+            # Use requested_formats to find the best video stream's resolution
+            best_height = None
+            for rf in (info.get('requested_formats') or []):
+                if rf.get('vcodec', 'none') != 'none' and rf.get('height'):
+                    best_height = rf['height']
+            if best_height is None:
+                best_height = info.get('height')
+            label = f"{best_height}p" if best_height else 'Best Quality'
+            # Use the original page URL as the download URL; the proxy
+            # will pass it together with format_id to yt-dlp.
+            pin_hls_entry = {
+                'url': url,  # original page URL, proxy will use yt-dlp
+                'quality': label,
+                'format': 'mp4',
+                'size': '',
+                'format_id': info['format_id'],
+            }
+            links.append(pin_hls_entry)
+
         # Facebook-specific fallback: try direct SD/HD URLs from info dict.
         if not links and platform == 'facebook':
             # Try the direct webpage URLs (sd_url / hd_url) that Facebook
