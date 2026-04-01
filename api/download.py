@@ -111,6 +111,7 @@ def extract_video_info(url):
                 'format_note': f.get('format_note', ''),
                 'tbr': f.get('tbr') or 0,
                 'abr': f.get('abr') or 0,
+                'format_id': f.get('format_id', ''),
             }
             seen_urls.add(f_url)
 
@@ -136,12 +137,15 @@ def extract_video_info(url):
             seen_heights.add(h)
 
             label = f"{h}p" if h else vf['format_note'] or 'Video'
-            links.append({
+            link_entry = {
                 'url': vf['url'],
                 'quality': label,
                 'format': vf['ext'] if vf['ext'] in ('mp4', 'webm', 'mkv') else 'mp4',
                 'size': _format_size(vf['filesize']),
-            })
+            }
+            if vf.get('format_id'):
+                link_entry['format_id'] = vf['format_id']
+            links.append(link_entry)
 
         # For Facebook, Instagram, TikTok, and Pinterest: never add video-only
         # formats (they have no audio and would produce silent videos).
@@ -158,12 +162,15 @@ def extract_video_info(url):
                 seen_heights.add(h)
 
                 label = f"{h}p" if h else vf['format_note'] or 'Video'
-                links.append({
+                link_entry = {
                     'url': vf['url'],
                     'quality': label,
                     'format': vf['ext'] if vf['ext'] in ('mp4', 'webm', 'mkv') else 'mp4',
                     'size': _format_size(vf['filesize']),
-                })
+                }
+                if vf.get('format_id'):
+                    link_entry['format_id'] = vf['format_id']
+                links.append(link_entry)
 
         # Re-sort all links by resolution descending
         links.sort(
@@ -273,6 +280,7 @@ def extract_video_info(url):
             'title': title,
             'thumbnail': thumbnail,
             'links': links,
+            'original_url': url,
         }
 
         if duration:
