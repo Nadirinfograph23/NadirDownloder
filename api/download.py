@@ -5,6 +5,7 @@ to extract video download links from social media platforms.
 """
 
 from http.server import BaseHTTPRequestHandler
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import re
 import urllib.parse
@@ -116,6 +117,67 @@ _BROWSER_UA = (
     'AppleWebKit/537.36 (KHTML, like Gecko) '
     'Chrome/124.0.0.0 Safari/537.36'
 )
+
+# Platform-specific headers used when testing CDN URLs for validity
+_PLATFORM_TEST_HEADERS = {
+    'facebook':  {'User-Agent': _BROWSER_UA, 'Referer': 'https://www.facebook.com/'},
+    'instagram': {'User-Agent': _BROWSER_UA, 'Referer': 'https://www.instagram.com/'},
+    'pinterest': {'User-Agent': _BROWSER_UA, 'Referer': 'https://www.pinterest.com/'},
+    'twitter':   {'User-Agent': _BROWSER_UA, 'Referer': 'https://twitter.com/'},
+    'youtube':   {'User-Agent': _BROWSER_UA},
+}
+
+
+def _test_url(url, headers=None, timeout=5):
+    """
+    Quick HEAD request to check whether a CDN URL is alive and serves video.
+
+    Returns True  → URL looks valid (keep it).
+    Returns False → URL returned an explicit 4xx/5xx or an XML/HTML error page.
+    Returns True  → on timeout or network error (give benefit of the doubt).
+    """
+    try:
+        r = _requests.head(
+            url,
+            headers=headers or {'User-Agent': _BROWSER_UA},
+            timeout=timeout,
+            allow_redirects=True,
+        )
+        if r.status_code >= 400:
+            return False
+        ct = r.headers.get('Content-Type', '').lower()
+        # Reject XML / HTML error pages (e.g. AWS S3 AccessDenied)
+        if 'xml' in ct or 'html' in ct:
+            return False
+        return True
+    except Exception:
+        # Timeout or connection error — keep the link (don't punish slow CDNs)
+        return True
+
+
+def _filter_working_links(links, platform):
+    """
+    Test each CDN URL concurrently and remove broken ones.
+
+    TikTok is excluded: its proxy always re-downloads via yt-dlp using the
+    original page URL, so the extracted CDN URLs are never used directly.
+
+    If every URL fails the test the original list is returned unchanged
+    (better to show something than an empty result set).
+    """
+    if platform == 'tiktok' or not links:
+        return links
+
+    headers = _PLATFORM_TEST_HEADERS.get(platform, {'User-Agent': _BROWSER_UA})
+
+    def _check(link):
+        return _test_url(link['url'], headers), link
+
+    with ThreadPoolExecutor(max_workers=min(6, len(links))) as ex:
+        results = list(ex.map(_check, links))
+
+    working = [link for ok, link in results if ok]
+    return working if working else links  # fallback: keep all if all failed
 
 
 def _fetch_facebook_video(url):
@@ -339,11 +401,12 @@ def extract_video_info(url):
     # yt-dlp cannot parse Facebook pages from server environments, so skip it.
     if platform == 'facebook':
         if scraped_links:
+            working = _filter_working_links(scraped_links, platform)
             return {
                 'success': True,
                 'title': 'Facebook Video',
                 'thumbnail': '',
-                'links': scraped_links,
+                'links': working or scraped_links,
                 'original_url': url,
                 'platform': platform,
             }
@@ -629,6 +692,13 @@ def extract_video_info(url):
 
         # Limit to top 6 qualities to keep UI clean
         links = links[:6]
+
+        # Test each CDN URL concurrently and remove broken/expired ones.
+        # This prevents XML error pages from reaching the user's browser.
+        links = _filter_working_links(links, platform)
+
+        if not links:
+            return {'success': False, 'error': 'No working download links found for this video. Please try again.'}
 
         result = {
             'success': True,
