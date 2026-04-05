@@ -192,15 +192,42 @@ def _fetch_facebook_video(url):
     return links[:4]
 
 
+def _resolve_pinterest_url(url):
+    """
+    Resolve a pin.it short URL to a clean pinterest.com/pin/<id>/ URL.
+    pin.it redirects through Pinterest's API, so we follow the chain and
+    extract the numeric pin ID from whichever hop contains it.
+    Non-pin.it URLs are returned unchanged.
+    """
+    if 'pin.it' not in url.lower():
+        return url
+    try:
+        r = _requests.get(
+            url,
+            headers={'User-Agent': _BROWSER_UA, 'Accept': 'text/html'},
+            timeout=12,
+            allow_redirects=True,
+        )
+        # Walk the redirect chain (including the final response URL)
+        for resp in list(r.history) + [r]:
+            m = re.search(r'/pin/(\d+)/', resp.url)
+            if m:
+                return f'https://www.pinterest.com/pin/{m.group(1)}/'
+    except Exception:
+        pass
+    return url
+
+
 def _fetch_pinterest_video(url):
     """
     Extract Pinterest video links via savepin.app — the same service used by
     the reference repo (milancodess/universalDownloader).
 
-    Sends the Pinterest / pin.it URL to savepin.app's download endpoint and
-    parses the returned HTML table for direct MP4 CDN links.
+    pin.it short URLs are resolved to a full pinterest.com/pin/<id>/ URL
+    before calling savepin.app, because savepin.app cannot handle short URLs.
     Returns a list of link dicts [{url, quality, format, size}].
     """
+    url = _resolve_pinterest_url(url)
     encoded_url = urllib.parse.quote(url, safe='')
     api_url = (
         f'https://www.savepin.app/download.php'
@@ -272,6 +299,11 @@ def extract_video_info(url):
     All other platforms (and as fallback) use yt-dlp.
     """
     platform = detect_platform(url)
+
+    # Resolve pin.it short URLs to a clean pinterest.com/pin/<id>/ URL so
+    # that both the scraping path and yt-dlp receive a canonical URL.
+    if platform == 'pinterest':
+        url = _resolve_pinterest_url(url)
 
     # --- Fast platform-specific extraction (Facebook / Pinterest) ---
     # These are tried first because they are faster and more reliable than
