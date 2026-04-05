@@ -19,11 +19,13 @@ import requests as _req
 # Hobby plan.  We cap slightly below that to leave room for headers.
 MAX_PROXY_BYTES = 50 * 1024 * 1024  # 50 MB generous cap; Vercel will enforce its own limit
 
-# Platforms that need yt-dlp to download (CDN URLs require cookies /
-# auth tokens that only yt-dlp can manage internally).
-# Facebook and Pinterest now use direct CDN URLs obtained via page scraping,
-# so they go through the standard urllib proxy path (not yt-dlp).
-YTDLP_PLATFORMS = {'tiktok'}
+# Platforms that need yt-dlp to download.
+# Facebook CDN URLs (fbcdn.net) expire within seconds of extraction, so
+# by the time the user clicks download they are stale → the proxy would
+# return a 403 text error which the browser saves as "proxy.txt".
+# Using yt-dlp at click time (same as TikTok) means yt-dlp fetches a
+# fresh URL internally, so expiration is never an issue.
+YTDLP_PLATFORMS = {'tiktok', 'facebook'}
 
 # Platforms whose CDN URLs require server-side headers to download.
 # Only these platforms are proxied; others use direct links.
