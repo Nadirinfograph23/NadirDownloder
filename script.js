@@ -424,13 +424,20 @@ function showResults(data, platform) {
         // special headers and work fine as direct browser downloads.
         var needsProxy = ['tiktok', 'facebook', 'instagram', 'twitter'];
         var downloadHref;
-        // TikTok CDN URLs require yt-dlp to download (cookies / auth
-        // handled internally); pass the original page URL + format_id
-        // so the proxy can use yt-dlp.
-        // Facebook CDN URLs expire within seconds; use yt-dlp at click time
-        // (same as TikTok) so the proxy always fetches a fresh URL.
-        var ytdlpPlatforms = ['tiktok', 'facebook'];
-        if (ytdlpPlatforms.indexOf(platform) !== -1 && data.original_url && link.format_id) {
+        // TikTok: yt-dlp downloads via original URL + format_id.
+        var ytdlpPlatforms = ['tiktok'];
+        // Facebook: proxy re-extracts a fresh CDN URL at click time via
+        // yt-dlp (skip_download=True), then streams it — no URL expiry,
+        // no ffmpeg. Always send the original Facebook page URL.
+        if (platform === 'facebook' && data.original_url) {
+            var safeTitle = (data.title || 'video').replace(/[^\w\s\-]/g, '').trim().substring(0, 60) || 'video';
+            downloadHref = '/api/proxy'
+                + '?url=' + encodeURIComponent(data.original_url)
+                + '&platform=facebook'
+                + (link.format_id ? '&format_id=' + encodeURIComponent(link.format_id) : '')
+                + '&filename=' + encodeURIComponent(safeTitle)
+                + '&format=mp4';
+        } else if (ytdlpPlatforms.indexOf(platform) !== -1 && data.original_url && link.format_id) {
             var safeTitle = (data.title || 'video').replace(/[^\w\s\-]/g, '').trim().substring(0, 60) || 'video';
             downloadHref = '/api/proxy'
                 + '?url=' + encodeURIComponent(data.original_url)
