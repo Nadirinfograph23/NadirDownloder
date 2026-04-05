@@ -480,11 +480,12 @@ function _buildProxyUrl(link, platform, originalUrl, title) {
     // These platforms re-extract at download time via yt-dlp (original page URL).
     // - tiktok/instagram/twitter: CDN URLs expire quickly
     // - youtube: HD formats need ffmpeg merge (video-only + audio)
-    // - pinterest: savepin.app links are unreliable; fresh yt-dlp is better
-    var ytdlpPlatforms = ['tiktok', 'instagram', 'twitter', 'youtube', 'pinterest'];
+    var ytdlpPlatforms = ['tiktok', 'instagram', 'twitter', 'youtube'];
 
-    // These platforms need server-side headers to proxy the CDN URL directly.
-    var needsProxy = ['facebook'];
+    // These platforms stream the CDN URL server-side with proper headers.
+    // - facebook: fbcdn.net needs Referer header
+    // - pinterest: pinimg.com needs Referer header; CDN links are stable/direct
+    var needsProxy = ['facebook', 'pinterest'];
 
     if (ytdlpPlatforms.indexOf(platform) !== -1 && originalUrl) {
         return '/api/proxy'
@@ -500,7 +501,6 @@ function _buildProxyUrl(link, platform, originalUrl, title) {
             + '&filename=' + encodeURIComponent(safeTitle)
             + '&format=' + encodeURIComponent(link.format || 'mp4');
     } else {
-        // YouTube and others: direct CDN URL (long-lived signed URLs, no proxy needed)
         return link.url;
     }
 }
