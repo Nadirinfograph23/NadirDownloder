@@ -28,6 +28,7 @@ var TRANSLATIONS = {
         toast_unsupported: 'Unsupported platform. Try Facebook, TikTok, YouTube, Instagram, Pinterest, or X',
         toast_extracting: 'Extracting download links from ',
         toast_ready: 'Download links ready!',
+        toast_downloading: 'Downloading, please wait...',
         toast_failed: 'Failed to extract links',
         toast_network: 'Connection error',
         toast_pasted: 'Link pasted!',
@@ -59,6 +60,7 @@ var TRANSLATIONS = {
         toast_unsupported: '\u0645\u0646\u0635\u0629 \u063a\u064a\u0631 \u0645\u062f\u0639\u0648\u0645\u0629. \u062c\u0631\u0628 Facebook, TikTok, YouTube, Instagram, Pinterest, \u0623\u0648 X',
         toast_extracting: '\u062c\u0627\u0631\u064a \u0627\u0633\u062a\u062e\u0631\u0627\u062c \u0631\u0648\u0627\u0628\u0637 \u0627\u0644\u062a\u062d\u0645\u064a\u0644 \u0645\u0646 ',
         toast_ready: '\u0631\u0648\u0627\u0628\u0637 \u0627\u0644\u062a\u062d\u0645\u064a\u0644 \u062c\u0627\u0647\u0632\u0629!',
+        toast_downloading: '\u062c\u0627\u0631\u064a \u0627\u0644\u062a\u062d\u0645\u064a\u0644\u060c \u064a\u0631\u062c\u0649 \u0627\u0644\u0627\u0646\u062a\u0638\u0627\u0631...',
         toast_failed: '\u0641\u0634\u0644 \u0641\u064a \u0627\u0633\u062a\u062e\u0631\u0627\u062c \u0627\u0644\u0631\u0648\u0627\u0628\u0637',
         toast_network: '\u062e\u0637\u0623 \u0641\u064a \u0627\u0644\u0627\u062a\u0635\u0627\u0644',
         toast_pasted: '\u062a\u0645 \u0644\u0635\u0642 \u0627\u0644\u0631\u0627\u0628\u0637!',
@@ -90,6 +92,7 @@ var TRANSLATIONS = {
         toast_unsupported: 'Plateforme non support\u00e9e. Essayez Facebook, TikTok, YouTube, Instagram, Pinterest ou X',
         toast_extracting: 'Extraction des liens depuis ',
         toast_ready: 'Liens de t\u00e9l\u00e9chargement pr\u00eats !',
+        toast_downloading: 'T\u00e9l\u00e9chargement en cours, veuillez patienter...',
         toast_failed: '\u00c9chec de l\u2019extraction des liens',
         toast_network: 'Erreur de connexion',
         toast_pasted: 'Lien coll\u00e9 !',
@@ -480,12 +483,12 @@ function _buildProxyUrl(link, platform, originalUrl, title) {
     // These platforms re-extract at download time via yt-dlp (original page URL).
     // - tiktok/instagram/twitter: CDN URLs expire quickly
     // - youtube: HD formats need ffmpeg merge (video-only + audio)
-    var ytdlpPlatforms = ['tiktok', 'instagram', 'twitter', 'youtube'];
+    // - pinterest: CDN pinimg.com URLs return 403; must re-extract with yt-dlp
+    var ytdlpPlatforms = ['tiktok', 'instagram', 'twitter', 'youtube', 'pinterest'];
 
     // These platforms stream the CDN URL server-side with proper headers.
     // - facebook: fbcdn.net needs Referer header
-    // - pinterest: pinimg.com needs Referer header; CDN links are stable/direct
-    var needsProxy = ['facebook', 'pinterest'];
+    var needsProxy = ['facebook'];
 
     if (ytdlpPlatforms.indexOf(platform) !== -1 && originalUrl) {
         return '/api/proxy'
@@ -518,9 +521,52 @@ function _triggerDownload(url, title, format) {
     document.body.removeChild(a);
 }
 
-// Handle a download button click — directly trigger without a slow pre-check.
-// Instagram/Twitter re-extract fresh URLs server-side at download time via yt-dlp,
-// so there is no risk of stale CDN links producing a proxy.txt save.
+// Download via fetch() so we can detect server-side errors before they
+// reach the user as a corrupted file. On success, creates a Blob URL and
+// triggers a real browser save-dialog. On error, shows a toast.
+function _fetchAndDownload(url, title, format, iconEl, btn) {
+    var safeTitle = (title || 'video').replace(/[^\w\s\-]/g, '').trim().substring(0, 60) || 'video';
+    var filename = safeTitle + '.' + (format || 'mp4');
+
+    fetch(url)
+        .then(function(resp) {
+            var ct = resp.headers.get('Content-Type') || '';
+            if (!resp.ok || ct.indexOf('application/json') !== -1 || ct.indexOf('text/') !== -1) {
+                return resp.json().then(function(data) {
+                    var msg = (data && (data.error || data.message)) ? (data.error || data.message) : t('toast_failed');
+                    showToast(msg, 'fas fa-exclamation-triangle');
+                }).catch(function() {
+                    showToast(t('toast_failed'), 'fas fa-exclamation-triangle');
+                });
+            }
+            return resp.blob().then(function(blob) {
+                var blobUrl = URL.createObjectURL(blob);
+                var a = document.createElement('a');
+                a.href = blobUrl;
+                a.download = filename;
+                a.style.display = 'none';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                setTimeout(function() { URL.revokeObjectURL(blobUrl); }, 10000);
+                showToast(t('toast_ready'), 'fas fa-check-circle');
+            });
+        })
+        .catch(function(err) {
+            showToast(t('toast_failed'), 'fas fa-exclamation-triangle');
+            console.error('Download error:', err);
+        })
+        .finally(function() {
+            if (iconEl) iconEl.className = 'fas fa-download';
+            if (btn) btn.style.opacity = '';
+        });
+}
+
+// Platforms that use yt-dlp server-side (long-running) — use direct link download
+// to avoid buffering large files in JS memory; server returns a complete file.
+var _STREAMING_PLATFORMS = ['tiktok', 'instagram', 'twitter', 'youtube', 'pinterest'];
+
+// Handle a download button click.
 function handleLinkClick(index) {
     if (!currentDownloadData) return;
 
@@ -536,18 +582,20 @@ function handleLinkClick(index) {
     var btn = document.getElementById('dl-btn-' + index);
     var iconEl = document.getElementById('dl-icon-' + index);
 
-    // Brief visual feedback
-    if (btn) {
-        btn.style.opacity = '0.8';
-        setTimeout(function() { if (btn) btn.style.opacity = ''; }, 800);
-    }
-    if (iconEl) {
-        iconEl.className = 'fas fa-spinner fa-spin';
-        setTimeout(function() { if (iconEl) iconEl.className = 'fas fa-download'; }, 1500);
-    }
+    if (iconEl) iconEl.className = 'fas fa-spinner fa-spin';
+    if (btn) btn.style.opacity = '0.8';
 
-    _triggerDownload(downloadUrl, d.title, link.format || 'mp4');
-    showToast(t('toast_ready'), 'fas fa-download');
+    // For yt-dlp platforms use fetch() to detect errors; for direct links trigger immediately
+    var isProxyDownload = (downloadUrl.indexOf('/api/proxy') !== -1);
+    if (isProxyDownload) {
+        showToast(t('toast_downloading') || 'جاري التحميل...', 'fas fa-spinner fa-spin');
+        _fetchAndDownload(downloadUrl, d.title, link.format || 'mp4', iconEl, btn);
+    } else {
+        _triggerDownload(downloadUrl, d.title, link.format || 'mp4');
+        showToast(t('toast_ready'), 'fas fa-download');
+        if (iconEl) setTimeout(function() { iconEl.className = 'fas fa-download'; }, 1500);
+        if (btn) setTimeout(function() { btn.style.opacity = ''; }, 800);
+    }
 }
 
 // Hide results
