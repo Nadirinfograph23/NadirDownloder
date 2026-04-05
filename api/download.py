@@ -305,13 +305,14 @@ def extract_video_info(url):
     if platform == 'pinterest':
         url = _resolve_pinterest_url(url)
 
-    # --- Fast platform-specific extraction (Facebook / Pinterest) ---
-    # These are tried first because they are faster and more reliable than
-    # running yt-dlp for these platforms.
+    # --- Pinterest scraping (fast, reliable CDN URLs) ---
+    # Facebook previously used fdown.net scraping but the returned links
+    # redirected through intermediate domains that failed the proxy CDN
+    # allow-list check, causing the browser to save a text error as
+    # "proxy.txt".  Facebook now uses yt-dlp (same approach as Instagram)
+    # which returns direct fbcdn.net URLs that proxy correctly.
     scraped_links = []
-    if platform == 'facebook':
-        scraped_links = _fetch_facebook_video(url)
-    elif platform == 'pinterest':
+    if platform == 'pinterest':
         scraped_links = _fetch_pinterest_video(url)
 
     ydl_opts = {
@@ -332,6 +333,18 @@ def extract_video_info(url):
                 'Chrome/120.0.0.0 Safari/537.36'
             ),
             'Referer': 'https://www.tiktok.com/',
+        }
+
+    # Facebook needs a browser User-Agent and Referer so yt-dlp receives
+    # the direct fbcdn.net CDN URLs (same reliable approach as Instagram).
+    if platform == 'facebook':
+        ydl_opts['http_headers'] = {
+            'User-Agent': (
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/124.0.0.0 Safari/537.36'
+            ),
+            'Referer': 'https://www.facebook.com/',
         }
 
     try:
