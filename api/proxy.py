@@ -23,7 +23,7 @@ MAX_PROXY_BYTES = 200 * 1024 * 1024  # 200 MB cap
 # - twitter:  CDN URLs expire similarly fast
 # - youtube:  HD formats (720p+) are video-only; yt-dlp+ffmpeg merges video+audio
 # - pinterest: CDN links from savepin.app are unreliable; fresh yt-dlp is better
-YTDLP_PLATFORMS = {'tiktok', 'instagram', 'twitter', 'youtube', 'pinterest'}
+YTDLP_PLATFORMS = {'tiktok', 'instagram', 'twitter', 'youtube'}
 
 # Platforms whose CDN URLs require server-side headers to download.
 # Domain patterns are anchored so that e.g. "evil-tiktokcdn.com" won't match.
@@ -87,13 +87,16 @@ PLATFORM_CONFIG = {
         'domain_patterns': [
             r'(^|\.)pinimg\.com$',
             r'(^|\.)pinterest\.com$',
+            r'(^|\.)pinimg\.net$',
         ],
         'headers': {
             'User-Agent': (
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
                 'AppleWebKit/537.36 (KHTML, like Gecko) '
-                'Chrome/120.0.0.0 Safari/537.36'
+                'Chrome/124.0.0.0 Safari/537.36'
             ),
+            'Referer': 'https://www.pinterest.com/',
+            'Accept': 'video/mp4,video/*;q=0.9,*/*;q=0.8',
         },
     },
     'twitter': {
@@ -173,10 +176,18 @@ def _ydl_opts_for_platform(platform, format_id, tmp_path):
         base['http_headers'] = {'User-Agent': _UA}
 
     elif platform == 'youtube':
+        # Use Android player client to bypass server IP blocks.
         # format_id is a combined string like "399+140" built at extraction time.
-        # yt-dlp uses ffmpeg to merge the video and audio streams into one mp4.
+        _UA_ANDROID = 'com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip'
         base['format'] = format_id or 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best'
-        base['http_headers'] = {'User-Agent': _UA}
+        base['http_headers'] = {'User-Agent': _UA_ANDROID}
+        base['extractor_args'] = {
+            'youtube': {
+                'player_client': ['android', 'ios', 'tv_embedded', 'mweb', 'web'],
+                'player_skip': ['configs'],
+            }
+        }
+        base['age_limit'] = 99
 
     elif platform == 'pinterest':
         base['format'] = format_id or 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best'
