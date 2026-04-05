@@ -48,37 +48,61 @@ def _pinterest_direct_mp4(formats, links, seen_heights):
         HLS:    https://v1.pinimg.com/videos/iht/hls/<hash>_<width>w.m3u8
         Direct: https://v1.pinimg.com/videos/mc/720p/<hash>.mp4
 
-    The ``mc/720p`` MP4 already contains both video and audio, so it can
+    The mc/720p MP4 already contains both video and audio, so it can
     be proxied directly without needing ffmpeg to merge separate streams.
+    This function also tries v2 CDN path variants and multiple resolutions.
     """
-    # Extract the video hash from any HLS manifest URL.
+    # More flexible regex: matches any pinimg.com subdomain and any HLS path variant.
+    HLS_RE = re.compile(
+        r'(https://[^/]*\.pinimg\.com)/videos/(?:[^/]+/)*hls/(.+?)_\w+\.m3u8'
+    )
+
+    cdn_base = None
     video_hash = None
     best_height = None
+
     for f in formats:
         f_url = f.get('url', '')
-        m = re.match(
-            r'https://v\d+\.pinimg\.com/videos/iht/hls/(.+?)_\w+\.m3u8',
-            f_url,
-        )
+        m = HLS_RE.match(f_url)
         if m:
-            video_hash = m.group(1)
+            cdn_base = m.group(1)  # e.g. https://v1.pinimg.com
+            video_hash = m.group(2)
             h = f.get('height')
             if h and (best_height is None or h > best_height):
                 best_height = h
-            break
 
     if not video_hash:
         return
 
-    direct_url = (
-        f'https://v1.pinimg.com/videos/mc/720p/{video_hash}.mp4'
-    )
-    label = f'{best_height}p' if best_height else '720p'
-    if best_height not in seen_heights:
-        seen_heights.add(best_height)
+    # Default base if not found from HLS URL
+    if not cdn_base:
+        cdn_base = 'https://v1.pinimg.com'
+
+    # Offer multiple resolutions; the CDN serves 720p and v2/720p variants.
+    resolutions = [
+        ('720p', f'{cdn_base}/videos/mc/720p/{video_hash}.mp4'),
+        ('480p', f'{cdn_base}/videos/mc/480p/{video_hash}.mp4'),
+        ('v2/720p', f'{cdn_base}/videos/mc/v2/720p/{video_hash}.mp4'),
+    ]
+
+    added = False
+    for label, url in resolutions:
+        res_num = int(label.split('/')[-1].replace('p', '')) if label[-1] == 'p' else 720
+        if res_num not in seen_heights:
+            seen_heights.add(res_num)
+            links.append({
+                'url': url,
+                'quality': label,
+                'format': 'mp4',
+                'size': '',
+            })
+            added = True
+
+    # If nothing was added (all heights already seen), force-add the 720p variant.
+    if not added:
         links.append({
-            'url': direct_url,
-            'quality': label,
+            'url': f'{cdn_base}/videos/mc/720p/{video_hash}.mp4',
+            'quality': '720p',
             'format': 'mp4',
             'size': '',
         })
@@ -202,8 +226,11 @@ def extract_video_info(url):
         # muxed formats), construct direct MP4 URLs from Pinterest's CDN.
         # The CDN path mc/720p/<hash>.mp4 serves a muxed file (video+audio)
         # that can be proxied without needing ffmpeg to merge streams.
+        # Also include ALL formats (including HLS) in the search so that
+        # pin.it short-URL redirects (which produce only HLS entries) are covered.
         if platform == 'pinterest' and not links:
-            _pinterest_direct_mp4(formats, links, seen_heights)
+            all_formats = info.get('formats', [])
+            _pinterest_direct_mp4(all_formats, links, seen_heights)
 
         # For Facebook, Instagram, and TikTok: never add video-only
         # formats (they have no audio and would produce silent videos).
@@ -306,23 +333,39 @@ def extract_video_info(url):
                 links.append(tk_entry)
                 seen_urls.add(main_url)
 
-        # Pinterest-specific fallback: use the main video URL which is
-        # typically a muxed stream with both video and audio.
-        if not links and platform == 'pinterest' and info.get('url'):
-            main_url = info['url']
-            if main_url not in seen_urls:
-                height = info.get('height')
-                label = f"{height}p" if height else 'Best Quality'
-                pin_entry = {
-                    'url': main_url,
-                    'quality': label,
-                    'format': info.get('ext', 'mp4'),
-                    'size': _format_size(info.get('filesize') or info.get('filesize_approx')),
-                }
-                if info.get('format_id'):
-                    pin_entry['format_id'] = info['format_id']
-                links.append(pin_entry)
-                seen_urls.add(main_url)
+        # Pinterest-specific fallback: if the main URL is a direct MP4, use it.
+        # If it is an HLS manifest, try to derive a direct CDN MP4 URL from it.
+        if not links and platform == 'pinterest':
+            main_url = info.get('url', '')
+            if main_url and main_url not in seen_urls:
+                HLS_RE = re.compile(
+                    r'(https://[^/]*\.pinimg\.com)/videos/(?:[^/]+/)*hls/(.+?)_\w+\.m3u8'
+                )
+                hls_m = HLS_RE.match(main_url)
+                if hls_m:
+                    cdn_base = hls_m.group(1)
+                    video_hash = hls_m.group(2)
+                    direct_url = f'{cdn_base}/videos/mc/720p/{video_hash}.mp4'
+                    links.append({
+                        'url': direct_url,
+                        'quality': '720p',
+                        'format': 'mp4',
+                        'size': '',
+                    })
+                    seen_urls.add(direct_url)
+                elif not main_url.endswith('.m3u8'):
+                    height = info.get('height')
+                    label = f"{height}p" if height else 'Best Quality'
+                    pin_entry = {
+                        'url': main_url,
+                        'quality': label,
+                        'format': info.get('ext', 'mp4'),
+                        'size': _format_size(info.get('filesize') or info.get('filesize_approx')),
+                    }
+                    if info.get('format_id'):
+                        pin_entry['format_id'] = info['format_id']
+                    links.append(pin_entry)
+                    seen_urls.add(main_url)
 
         # Facebook-specific fallback: try direct SD/HD URLs from info dict.
         if not links and platform == 'facebook':
