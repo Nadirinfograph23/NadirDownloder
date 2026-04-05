@@ -395,9 +395,16 @@ function showResults(data, platform) {
     previewPlatformIcon.style.color = platformInfo.color;
     previewPlatformName.textContent = platformInfo.name;
 
-    // Set thumbnail if available
+    // Set thumbnail if available — route through our thumbnail proxy to avoid
+    // CORS / Referer restrictions on Instagram, TikTok, Twitter CDN URLs.
     if (data.thumbnail) {
-        previewThumbnail.innerHTML = '<img src="' + escapeHtml(data.thumbnail) + '" alt="Video thumbnail"><i class="fas fa-play-circle preview-play-icon" id="previewPlayIcon"></i>';
+        var thumbSrc = data.thumbnail;
+        // Use server-side proxy for platforms with restricted thumbnail CDNs
+        var thumbProxyPlatforms = ['instagram', 'tiktok', 'twitter', 'facebook', 'pinterest'];
+        if (thumbProxyPlatforms.indexOf(platform) !== -1) {
+            thumbSrc = '/api/thumbnail?platform=' + encodeURIComponent(platform) + '&url=' + encodeURIComponent(data.thumbnail);
+        }
+        previewThumbnail.innerHTML = '<img src="' + escapeHtml(thumbSrc) + '" alt="Video thumbnail" onerror="this.parentElement.innerHTML=\'<i class=\\\'' + platformInfo.icon + '\\\' style=\\\"font-size:64px;color:' + platformInfo.color + ';opacity:0.3\\\"></i><i class=\\\"fas fa-play-circle preview-play-icon\\\"></i>\'"><i class="fas fa-play-circle preview-play-icon" id="previewPlayIcon"></i>';
     } else {
         previewThumbnail.innerHTML = '<i class="' + platformInfo.icon + '" style="font-size:64px; color:' + platformInfo.color + '; opacity:0.3"></i><i class="fas fa-play-circle preview-play-icon"></i>';
     }
@@ -450,8 +457,13 @@ function showResults(data, platform) {
 // Build proxy or direct URL for a link
 function _buildProxyUrl(link, platform, originalUrl, title) {
     var safeTitle = (title || 'video').replace(/[^\w\s\-]/g, '').trim().substring(0, 60) || 'video';
-    var ytdlpPlatforms = ['tiktok'];
-    var needsProxy = ['tiktok', 'facebook', 'instagram', 'twitter', 'pinterest'];
+
+    // These platforms re-extract at download time via yt-dlp (original page URL).
+    // This guarantees fresh CDN URLs — Instagram and Twitter CDN links expire in minutes.
+    var ytdlpPlatforms = ['tiktok', 'instagram', 'twitter'];
+
+    // These platforms need server-side headers to download (proxy the CDN URL).
+    var needsProxy = ['facebook', 'pinterest'];
 
     if (ytdlpPlatforms.indexOf(platform) !== -1 && originalUrl) {
         return '/api/proxy'
@@ -467,30 +479,12 @@ function _buildProxyUrl(link, platform, originalUrl, title) {
             + '&filename=' + encodeURIComponent(safeTitle)
             + '&format=' + encodeURIComponent(link.format || 'mp4');
     } else {
+        // YouTube and others: direct CDN URL (long-lived signed URLs, no proxy needed)
         return link.url;
     }
 }
 
-// Fetch only headers to verify the URL returns a real video (not XML / error page).
-// Aborts body transfer immediately after headers arrive to avoid wasting bandwidth.
-async function _checkProxyUrl(url) {
-    var controller = new AbortController();
-    try {
-        var resp = await fetch(url, { signal: controller.signal });
-        var ok = resp.ok;
-        var ct = (resp.headers.get('Content-Type') || '').toLowerCase();
-        controller.abort(); // cancel body — we only needed the status + content-type
-        if (!ok) return false;
-        if (ct.includes('xml') || ct.includes('html') || ct.startsWith('text/')) return false;
-        return true;
-    } catch (e) {
-        // AbortError after headers → we aborted ourselves → headers were valid
-        if (e.name === 'AbortError') return true;
-        return false; // network / DNS error
-    }
-}
-
-// Trigger a real browser download for a validated URL
+// Trigger a real browser download
 function _triggerDownload(url, title, format) {
     var safeTitle = (title || 'video').replace(/[^\w\s\-]/g, '').trim().substring(0, 60) || 'video';
     var a = document.createElement('a');
@@ -503,13 +497,14 @@ function _triggerDownload(url, title, format) {
     document.body.removeChild(a);
 }
 
-// Handle a download button click: pre-check URL, auto-fallback to next quality on failure
-async function handleLinkClick(index) {
+// Handle a download button click — directly trigger without a slow pre-check.
+// Instagram/Twitter re-extract fresh URLs server-side at download time via yt-dlp,
+// so there is no risk of stale CDN links producing a proxy.txt save.
+function handleLinkClick(index) {
     if (!currentDownloadData) return;
 
     var d = currentDownloadData;
 
-    // All qualities exhausted
     if (index >= d.links.length) {
         showToast(t('toast_failed'), 'fas fa-exclamation-triangle');
         return;
@@ -519,59 +514,19 @@ async function handleLinkClick(index) {
     var downloadUrl = _buildProxyUrl(link, d.platform, d.original_url, d.title);
     var btn = document.getElementById('dl-btn-' + index);
     var iconEl = document.getElementById('dl-icon-' + index);
-    var labelEl = document.getElementById('dl-label-' + index);
-    var fmtEl = document.getElementById('dl-format-' + index);
 
-    // TikTok goes through yt-dlp which is slow to respond headers — skip pre-check
-    var ytdlpPlatforms = ['tiktok'];
-    if (ytdlpPlatforms.indexOf(d.platform) !== -1) {
-        _triggerDownload(downloadUrl, d.title, link.format || 'mp4');
-        showToast(t('toast_ready'), 'fas fa-download');
-        return;
-    }
-
-    // Show checking state
+    // Brief visual feedback
     if (btn) {
-        btn.style.pointerEvents = 'none';
-        btn.style.opacity = '0.75';
+        btn.style.opacity = '0.8';
+        setTimeout(function() { if (btn) btn.style.opacity = ''; }, 800);
     }
-    if (iconEl) iconEl.className = 'fas fa-spinner fa-spin';
-    if (labelEl) labelEl.textContent = 'Checking...';
-
-    var isValid = await _checkProxyUrl(downloadUrl);
-
-    if (isValid) {
-        // Restore button, then trigger download
-        var qualityLabel = link.quality || ('Quality ' + (index + 1));
-        var sizeLabel = link.size ? ' - ' + link.size : '';
-        if (btn) {
-            btn.style.pointerEvents = '';
-            btn.style.opacity = '';
-        }
-        if (iconEl) iconEl.className = 'fas fa-download';
-        if (labelEl) labelEl.textContent = qualityLabel + sizeLabel;
-
-        _triggerDownload(downloadUrl, d.title, link.format || 'mp4');
-        showToast(t('toast_ready'), 'fas fa-download');
-    } else {
-        // Mark this quality as unavailable
-        if (btn) {
-            btn.style.pointerEvents = 'none';
-            btn.style.opacity = '0.35';
-        }
-        if (iconEl) iconEl.className = 'fas fa-times-circle';
-        if (labelEl) labelEl.textContent = 'Not available';
-        if (fmtEl) fmtEl.textContent = '✕';
-
-        // Auto-try next quality
-        var next = index + 1;
-        if (next < d.links.length) {
-            showToast('Trying next quality…', 'fas fa-sync-alt');
-            setTimeout(function() { handleLinkClick(next); }, 600);
-        } else {
-            showToast(t('toast_failed'), 'fas fa-exclamation-triangle');
-        }
+    if (iconEl) {
+        iconEl.className = 'fas fa-spinner fa-spin';
+        setTimeout(function() { if (iconEl) iconEl.className = 'fas fa-download'; }, 1500);
     }
+
+    _triggerDownload(downloadUrl, d.title, link.format || 'mp4');
+    showToast(t('toast_ready'), 'fas fa-download');
 }
 
 // Hide results
