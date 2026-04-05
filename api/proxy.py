@@ -8,11 +8,11 @@ fetches the video server-side and streams it back to the client.
 
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
-import urllib.request
 import re
 import os
 import tempfile
 import yt_dlp
+import requests as _req
 
 # Maximum response size we will proxy (bytes).
 # Vercel Serverless Functions have a 4.5 MB response-body limit on the
@@ -158,20 +158,32 @@ class handler(BaseHTTPRequestHandler):
             self._handle_ytdlp_download(video_url, platform, format_id, filename, fmt)
             return
 
-        if not _is_url_allowed(video_url, platform):
-            self._send_error(403, 'URL domain not allowed for this platform')
-            return
-
         config = PLATFORM_CONFIG[platform]
-        req = urllib.request.Request(video_url, headers=config['headers'])
 
+        # Use requests with redirect-following so that intermediate redirect
+        # URLs (e.g. from fdown.net) are transparently resolved to the actual
+        # CDN URL before the domain allow-list check.
         try:
-            resp = urllib.request.urlopen(req, timeout=25)
-        except urllib.error.HTTPError as e:
-            self._send_error(e.code, f'Upstream error: {e.code}')
+            resp = _req.get(
+                video_url,
+                headers=config['headers'],
+                timeout=25,
+                stream=True,
+                allow_redirects=True,
+            )
+            resp.raise_for_status()
+        except _req.exceptions.HTTPError as e:
+            self._send_error(e.response.status_code,
+                             f'Upstream error: {e.response.status_code}')
             return
         except Exception as e:
             self._send_error(502, f'Failed to fetch video: {str(e)}')
+            return
+
+        # Safety check on the FINAL URL (after all redirects).
+        if not _is_url_allowed(resp.url, platform):
+            resp.close()
+            self._send_error(403, 'URL domain not allowed for this platform')
             return
 
         # Always force video/mp4 as Content-Type regardless of what the CDN
@@ -195,10 +207,9 @@ class handler(BaseHTTPRequestHandler):
 
         # Stream in 64 KB chunks
         total = 0
-        while True:
-            chunk = resp.read(65536)
+        for chunk in resp.iter_content(chunk_size=65536):
             if not chunk:
-                break
+                continue
             total += len(chunk)
             if total > MAX_PROXY_BYTES:
                 break
