@@ -524,40 +524,63 @@ def extract_video_info(url):
                 link_entry['format_id'] = vf['format_id']
             links.append(link_entry)
 
-        # For Pinterest: when only HLS streams are available (no direct
-        # muxed formats), construct direct MP4 URLs from Pinterest's CDN.
-        # The CDN path mc/720p/<hash>.mp4 serves a muxed file (video+audio)
-        # that can be proxied without needing ffmpeg to merge streams.
-        # Also include ALL formats (including HLS) in the search so that
-        # pin.it short-URL redirects (which produce only HLS entries) are covered.
+        # ── YouTube HD quality tiers via merged format strings ──────────────────
+        # YouTube's HD formats (720p+) are always video-only streams.
+        # We pair each mp4 video stream with the best m4a audio stream and
+        # store the combined format_id (e.g. "399+140"). At download time the
+        # proxy calls yt-dlp which uses ffmpeg to merge them into a single mp4.
+        if platform == 'youtube' and video_only:
+            # Find the best m4a audio-only format for clean mp4 output
+            best_audio = None
+            for f in formats:
+                is_audio_only = (f.get('acodec', 'none') != 'none'
+                                 and f.get('vcodec', 'none') == 'none')
+                if is_audio_only and f.get('ext', '') == 'm4a':
+                    if best_audio is None or (f.get('abr') or 0) > (best_audio.get('abr') or 0):
+                        best_audio = f
+
+            if best_audio:
+                audio_id = best_audio.get('format_id', '')
+                audio_size = (best_audio.get('filesize')
+                              or best_audio.get('filesize_approx') or 0)
+
+                # Only mp4 video streams → clean mp4 output after ffmpeg merge
+                yt_video_mp4 = [f for f in video_only if f.get('ext') == 'mp4']
+                yt_video_mp4.sort(key=lambda x: (x['height'] or 0), reverse=True)
+
+                for vf in yt_video_mp4:
+                    h = vf['height']
+                    if not h or h in seen_heights:
+                        continue
+                    seen_heights.add(h)
+
+                    vid_id = vf.get('format_id', '')
+                    merged_id = f'{vid_id}+{audio_id}' if vid_id and audio_id else vid_id
+                    total_size = (vf.get('filesize') or vf.get('filesize_approx') or 0) + audio_size
+
+                    links.append({
+                        'url': vf['url'],       # unused — proxy uses original_url
+                        'quality': f'{h}p',
+                        'format': 'mp4',
+                        'size': _format_size(total_size) if total_size else '',
+                        'format_id': merged_id,
+                    })
+
+        # ── Pinterest: ensure at least one link via yt-dlp re-extract ────────
+        # Pinterest downloads are always re-extracted server-side at click time,
+        # so CDN URL accuracy here doesn't matter — we just need display entries.
         if platform == 'pinterest' and not links:
             all_formats = info.get('formats', [])
             _pinterest_direct_mp4(all_formats, links, seen_heights)
-
-        # For Facebook, Instagram, and TikTok: never add video-only
-        # formats (they have no audio and would produce silent videos).
-        # For other platforms: add video-only as fallback if fewer than 3 muxed.
-        if platform not in ('facebook', 'instagram', 'tiktok', 'pinterest') and len(links) < 3:
-            video_only.sort(
-                key=lambda x: (x['height'] or 0, x['ext'] == 'mp4', x['tbr']),
-                reverse=True,
-            )
-            for vf in video_only:
-                h = vf['height']
-                if h in seen_heights:
-                    continue
-                seen_heights.add(h)
-
-                label = f"{h}p" if h else vf['format_note'] or 'Video'
-                link_entry = {
-                    'url': vf['url'],
-                    'quality': label,
-                    'format': vf['ext'] if vf['ext'] in ('mp4', 'webm', 'mkv') else 'mp4',
-                    'size': _format_size(vf['filesize']),
-                }
-                if vf.get('format_id'):
-                    link_entry['format_id'] = vf['format_id']
-                links.append(link_entry)
+            # Last resort: single "Best Quality" entry — proxy handles fresh dl
+            if not links:
+                links.append({
+                    'url': url,
+                    'quality': 'Best Quality',
+                    'format': 'mp4',
+                    'size': '',
+                    'format_id': None,
+                })
 
         # Re-sort all links by resolution descending
         links.sort(
