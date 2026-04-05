@@ -745,6 +745,16 @@ def extract_video_info(url):
                 'success': True, 'title': 'Video', 'thumbnail': '',
                 'links': scraped_links[:6], 'original_url': url,
             }
+        # Pinterest: CDN extraction often fails server-side (blocks headless requests).
+        # Return a fallback entry — the proxy re-extracts fresh at download time via yt-dlp.
+        if platform == 'pinterest':
+            return {
+                'success': True,
+                'title': 'Pinterest Video',
+                'thumbnail': '',
+                'links': [{'url': url, 'quality': 'Best Quality', 'format': 'mp4', 'size': '', 'format_id': None}],
+                'original_url': url,
+            }
         error_msg = str(e)
         if 'Private' in error_msg or 'private' in error_msg:
             return {'success': False, 'error': 'This video is private or unavailable.'}
@@ -756,6 +766,15 @@ def extract_video_info(url):
             return {
                 'success': True, 'title': 'Video', 'thumbnail': '',
                 'links': scraped_links[:6], 'original_url': url,
+            }
+        # Pinterest fallback on any unexpected error
+        if platform == 'pinterest':
+            return {
+                'success': True,
+                'title': 'Pinterest Video',
+                'thumbnail': '',
+                'links': [{'url': url, 'quality': 'Best Quality', 'format': 'mp4', 'size': '', 'format_id': None}],
+                'original_url': url,
             }
         return {'success': False, 'error': f'Download service error: {str(e)}'}
 

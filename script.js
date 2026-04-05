@@ -395,18 +395,37 @@ function showResults(data, platform) {
     previewPlatformIcon.style.color = platformInfo.color;
     previewPlatformName.textContent = platformInfo.name;
 
-    // Set thumbnail if available — route through our thumbnail proxy to avoid
-    // CORS / Referer restrictions on Instagram, TikTok, Twitter CDN URLs.
+    // Set thumbnail — use DOM element creation to avoid innerHTML escaping bugs
+    previewThumbnail.innerHTML = '';
+    var playIconEl = document.createElement('i');
+    playIconEl.className = 'fas fa-play-circle preview-play-icon';
+    playIconEl.id = 'previewPlayIcon';
+
+    function _setFallbackThumb() {
+        previewThumbnail.innerHTML = '';
+        var iconFb = document.createElement('i');
+        iconFb.className = platformInfo.icon;
+        iconFb.style.cssText = 'font-size:64px;color:' + platformInfo.color + ';opacity:0.3';
+        var playFb = document.createElement('i');
+        playFb.className = 'fas fa-play-circle preview-play-icon';
+        previewThumbnail.appendChild(iconFb);
+        previewThumbnail.appendChild(playFb);
+    }
+
     if (data.thumbnail) {
         var thumbSrc = data.thumbnail;
-        // Use server-side proxy for platforms with restricted thumbnail CDNs
         var thumbProxyPlatforms = ['instagram', 'tiktok', 'twitter', 'facebook', 'pinterest'];
         if (thumbProxyPlatforms.indexOf(platform) !== -1) {
             thumbSrc = '/api/thumbnail?platform=' + encodeURIComponent(platform) + '&url=' + encodeURIComponent(data.thumbnail);
         }
-        previewThumbnail.innerHTML = '<img src="' + escapeHtml(thumbSrc) + '" alt="Video thumbnail" onerror="this.parentElement.innerHTML=\'<i class=\\\'' + platformInfo.icon + '\\\' style=\\\"font-size:64px;color:' + platformInfo.color + ';opacity:0.3\\\"></i><i class=\\\"fas fa-play-circle preview-play-icon\\\"></i>\'"><i class="fas fa-play-circle preview-play-icon" id="previewPlayIcon"></i>';
+        var imgEl = document.createElement('img');
+        imgEl.alt = 'Video thumbnail';
+        imgEl.onerror = _setFallbackThumb;
+        imgEl.src = thumbSrc;
+        previewThumbnail.appendChild(imgEl);
+        previewThumbnail.appendChild(playIconEl);
     } else {
-        previewThumbnail.innerHTML = '<i class="' + platformInfo.icon + '" style="font-size:64px; color:' + platformInfo.color + '; opacity:0.3"></i><i class="fas fa-play-circle preview-play-icon"></i>';
+        _setFallbackThumb();
     }
 
     // Set title
