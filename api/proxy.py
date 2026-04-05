@@ -21,9 +21,9 @@ MAX_PROXY_BYTES = 50 * 1024 * 1024  # 50 MB generous cap; Vercel will enforce it
 
 # Platforms that need yt-dlp to download (CDN URLs require cookies /
 # auth tokens that only yt-dlp can manage internally).
-# Facebook CDN URLs expire quickly and require session cookies; plain
-# urllib downloads fail and produce an error page saved as proxy.txt.
-YTDLP_PLATFORMS = {'tiktok', 'facebook'}
+# Facebook and Pinterest now use direct CDN URLs obtained via page scraping,
+# so they go through the standard urllib proxy path (not yt-dlp).
+YTDLP_PLATFORMS = {'tiktok'}
 
 # Platforms whose CDN URLs require server-side headers to download.
 # Only these platforms are proxied; others use direct links.
@@ -63,8 +63,11 @@ PLATFORM_CONFIG = {
             'User-Agent': (
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
                 'AppleWebKit/537.36 (KHTML, like Gecko) '
-                'Chrome/120.0.0.0 Safari/537.36'
+                'Chrome/124.0.0.0 Safari/537.36'
             ),
+            'Referer': 'https://www.facebook.com/',
+            'Accept': 'video/mp4,video/*;q=0.9,*/*;q=0.8',
+            'Range': 'bytes=0-',
         },
     },
     'instagram': {
@@ -171,7 +174,11 @@ class handler(BaseHTTPRequestHandler):
             self._send_error(502, f'Failed to fetch video: {str(e)}')
             return
 
-        content_type = resp.headers.get('Content-Type', 'video/mp4')
+        # Always force video/mp4 as Content-Type regardless of what the CDN
+        # returns.  If the upstream sends text/plain (e.g. an error page),
+        # the browser would otherwise save the file as "proxy.txt".
+        upstream_ct = resp.headers.get('Content-Type', 'video/mp4')
+        content_type = 'video/mp4' if not upstream_ct.startswith('video/') else upstream_ct
         content_length = resp.headers.get('Content-Length', '')
 
         safe_name = _sanitise_filename(filename)
