@@ -25,6 +25,81 @@ import yt_dlp
 app = Flask(__name__, static_folder='.', static_url_path='')
 
 # ─────────────────────────────────────────────────────────────────────────────
+# yt-dlp auto-update — runs once in the background on every server startup.
+# Extractors for TikTok / Instagram / Pinterest / Twitter go stale when platforms
+# change their APIs.  Keeping yt-dlp current is the single most effective
+# mitigation for "temporarily broken" extraction.
+# ─────────────────────────────────────────────────────────────────────────────
+_ytdlp_update_status = {'done': False, 'updated': False, 'error': None}
+
+def _auto_update_ytdlp():
+    """
+    Use yt-dlp's own built-in self-update mechanism (works in NixOS/Replit).
+    Falls back to  pip install --user  on failure.
+    """
+    import subprocess, importlib
+    before = yt_dlp.version.__version__
+
+    def _reload_version():
+        try:
+            importlib.reload(yt_dlp.version)
+        except Exception:
+            pass
+
+    # Strategy 1: yt-dlp --update (the tool updates its own binary)
+    try:
+        res = subprocess.run(
+            [sys.executable, '-m', 'yt_dlp', '--update'],
+            capture_output=True, text=True, timeout=120,
+        )
+        _reload_version()
+        after = yt_dlp.version.__version__
+        if before != after:
+            _ytdlp_update_status.update({'done': True, 'updated': True, 'from': before, 'to': after})
+            print(f'[yt-dlp] Updated  {before} → {after}')
+            return
+        # Already current — strategy 1 was fine, just no new version
+        _ytdlp_update_status.update({'done': True, 'updated': False, 'from': before, 'to': after})
+        print(f'[yt-dlp] Already current ({after})')
+        return
+    except Exception:
+        pass
+
+    # Strategy 2: pip install --user (user-level, no system write needed)
+    try:
+        res = subprocess.run(
+            [sys.executable, '-m', 'pip', 'install', '--user', '-U', '--quiet', 'yt-dlp'],
+            capture_output=True, text=True, timeout=120,
+        )
+        _reload_version()
+        after = yt_dlp.version.__version__
+        _ytdlp_update_status.update({'done': True, 'updated': before != after, 'from': before, 'to': after})
+        print(f'[yt-dlp] pip --user update: {before} → {after}')
+        return
+    except Exception as exc:
+        _ytdlp_update_status.update({'done': True, 'error': str(exc)})
+        print(f'[yt-dlp] Auto-update failed: {exc}')
+
+threading.Thread(target=_auto_update_ytdlp, daemon=True).start()
+
+# ─────────────────────────────────────────────────────────────────────────────
+# /api/status — lightweight health + version check for debugging
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route('/api/status')
+def api_status():
+    import os as _os
+    cookie_dir = _os.path.join(_os.path.dirname(__file__), 'cookies')
+    cookie_files = [f for f in _os.listdir(cookie_dir) if f.endswith('.txt') and f != 'README.txt'] if _os.path.isdir(cookie_dir) else []
+    payload = {
+        'ytdlp_version': yt_dlp.version.__version__,
+        'ytdlp_update': _ytdlp_update_status,
+        'cookie_files_loaded': cookie_files,
+    }
+    resp = Response(json.dumps(payload), content_type='application/json')
+    resp.headers['Access-Control-Allow-Origin'] = '*'
+    return resp
+
+# ─────────────────────────────────────────────────────────────────────────────
 # /api/download  — extract video info and return download links as JSON
 # Accepts both POST (JSON body) and GET (query param) for flexibility.
 # ─────────────────────────────────────────────────────────────────────────────

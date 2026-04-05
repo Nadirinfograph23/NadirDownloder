@@ -2,16 +2,36 @@
 NADIR DOWNLOADER - Video Download API
 Uses direct page scraping (Facebook, Pinterest) and yt-dlp (other platforms)
 to extract video download links from social media platforms.
+
+Radical resilience strategy
+────────────────────────────
+1. Cookie files  — place Netscape-format cookies in  cookies/<platform>.txt
+                   (instagram.txt, tiktok.txt, twitter.txt, youtube.txt, facebook.txt)
+2. Multi-option yt-dlp retry chain — each platform is tried with progressively
+   different yt-dlp option sets so that temporary extractor quirks are bypassed.
+3. Platform-specific alternative extraction paths run BEFORE yt-dlp.
+4. yt-dlp is auto-updated on server startup so extractors stay current.
 """
 
 from http.server import BaseHTTPRequestHandler
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
+import os
 import re
 import urllib.parse
 import yt_dlp
 import requests as _requests
 from bs4 import BeautifulSoup as _BS
+
+# ── Cookie-file support ───────────────────────────────────────────────────────
+# Place Netscape/Mozilla cookie files (exported by browser extensions like
+# "Get cookies.txt LOCALLY") in the  cookies/  directory at the project root.
+_COOKIE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'cookies')
+
+def _cookie_file(platform: str):
+    """Return path to the cookie file for *platform* if it exists, else None."""
+    path = os.path.join(_COOKIE_DIR, f'{platform}.txt')
+    return path if os.path.isfile(path) else None
 
 
 def detect_platform(url):
@@ -377,25 +397,100 @@ def extract_video_info(url):
     elif platform == 'pinterest':
         scraped_links = _fetch_pinterest_video(url)
 
-    ydl_opts = {
+    # ── Base yt-dlp options ───────────────────────────────────────────────────
+    _UA_DESKTOP = (
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+        'AppleWebKit/537.36 (KHTML, like Gecko) '
+        'Chrome/124.0.0.0 Safari/537.36'
+    )
+    _UA_MOBILE = (
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) '
+        'AppleWebKit/605.1.15 (KHTML, like Gecko) '
+        'Version/17.0 Mobile/15E148 Safari/604.1'
+    )
+
+    base_ydl_opts = {
         'quiet': True,
         'no_warnings': True,
         'skip_download': True,
         'noplaylist': True,
-        'socket_timeout': 15,
-        'extractor_retries': 2,
+        'socket_timeout': 20,
+        'extractor_retries': 3,
+        'http_headers': {'User-Agent': _UA_DESKTOP},
     }
 
-    # TikTok needs specific headers to return valid download URLs
-    if platform == 'tiktok':
-        ydl_opts['http_headers'] = {
-            'User-Agent': (
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                'AppleWebKit/537.36 (KHTML, like Gecko) '
-                'Chrome/120.0.0.0 Safari/537.36'
-            ),
-            'Referer': 'https://www.tiktok.com/',
-        }
+    # Attach cookie file if available (enables auth for Instagram, Twitter, etc.)
+    cf = _cookie_file(platform)
+    if cf:
+        base_ydl_opts['cookiefile'] = cf
+
+    # ── Per-platform retry option sets ───────────────────────────────────────
+    # Each set is tried in order; the first that succeeds wins.
+    # This handles temporary extractor quirks, header changes, and soft IP blocks.
+    _PLATFORM_RETRY_SETS = {
+        'tiktok': [
+            # Attempt 1: mobile API endpoint (bypasses some IP bans)
+            {
+                'http_headers': {'User-Agent': _UA_MOBILE, 'Referer': 'https://www.tiktok.com/'},
+                'extractor_args': {'tiktok': {'api_hostname': ['api16-normal-c-useast1a.tiktokv.com']}},
+            },
+            # Attempt 2: desktop + different app name
+            {
+                'http_headers': {'User-Agent': _UA_DESKTOP, 'Referer': 'https://www.tiktok.com/'},
+                'extractor_args': {'tiktok': {'app_name': ['musical_ly'], 'app_version': ['34.1.2']}},
+            },
+            # Attempt 3: bare desktop, let yt-dlp decide
+            {'http_headers': {'User-Agent': _UA_DESKTOP}},
+        ],
+        'instagram': [
+            # Attempt 1: mobile UA (Instagram sometimes serves public content to mobile)
+            {'http_headers': {'User-Agent': _UA_MOBILE}},
+            # Attempt 2: desktop
+            {'http_headers': {'User-Agent': _UA_DESKTOP}},
+        ],
+        'twitter': [
+            {'http_headers': {'User-Agent': _UA_DESKTOP}},
+            {'http_headers': {'User-Agent': _UA_MOBILE}},
+        ],
+        'pinterest': [
+            {'http_headers': {'User-Agent': _UA_DESKTOP, 'Referer': 'https://www.pinterest.com/'}},
+            {'http_headers': {'User-Agent': _UA_MOBILE}},
+        ],
+        'youtube': [
+            {'http_headers': {'User-Agent': _UA_DESKTOP}},
+        ],
+        'facebook': [
+            {'http_headers': {'User-Agent': _UA_DESKTOP, 'Referer': 'https://www.facebook.com/'}},
+        ],
+    }
+
+    def _ydlp_extract_chain(url, platform):
+        """Try each option set for the platform; return info dict on first success."""
+        retry_sets = _PLATFORM_RETRY_SETS.get(platform, [{'http_headers': {'User-Agent': _UA_DESKTOP}}])
+        last_exc = None
+        for extra in retry_sets:
+            opts = {**base_ydl_opts, **extra}
+            # Per-set cookie override keeps the cookie file even if extra overrides headers
+            if cf and 'cookiefile' not in opts:
+                opts['cookiefile'] = cf
+            try:
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+                    if info:
+                        return info
+            except yt_dlp.utils.DownloadError as exc:
+                last_exc = exc
+                # If it's a hard auth/cookie error, no point retrying with same platform
+                msg = str(exc).lower()
+                if 'login' in msg or 'private' in msg or 'unavailable' in msg:
+                    break
+                continue
+            except Exception as exc:
+                last_exc = exc
+                continue
+        if last_exc:
+            raise last_exc
+        return None
 
     # Facebook: fdown.net already gave us direct fbcdn.net CDN URLs.
     # yt-dlp cannot parse Facebook pages from server environments, so skip it.
@@ -413,8 +508,7 @@ def extract_video_info(url):
         return {'success': False, 'error': 'Could not extract Facebook video. The video may be private or unavailable.'}
 
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+        info = _ydlp_extract_chain(url, platform)
 
         if not info:
             # yt-dlp returned nothing — if scraping worked use those links
@@ -750,7 +844,11 @@ def extract_video_info(url):
         if 'IP address is blocked' in error_msg or 'IP is blocked' in error_msg:
             return {'success': False, 'error': 'TikTok has blocked access from this server. Try again later or use a different network.'}
         if 'cookies' in error_msg.lower() or 'login' in error_msg.lower() or 'empty media response' in error_msg.lower():
-            return {'success': False, 'error': 'This platform requires a logged-in account. Video is not publicly accessible.'}
+            return {'success': False, 'error': (
+                'This platform requires authentication. '
+                'Export your browser cookies to cookies/' + (platform or 'platform') + '.txt '
+                'to enable authenticated downloads.'
+            )}
         if 'No video could be found' in error_msg:
             return {'success': False, 'error': 'No video found in this post. Make sure the link contains a video.'}
         if 'Private' in error_msg or 'private' in error_msg:
