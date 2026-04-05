@@ -745,36 +745,26 @@ def extract_video_info(url):
                 'success': True, 'title': 'Video', 'thumbnail': '',
                 'links': scraped_links[:6], 'original_url': url,
             }
-        # Pinterest: CDN extraction often fails server-side (blocks headless requests).
-        # Return a fallback entry — the proxy re-extracts fresh at download time via yt-dlp.
-        if platform == 'pinterest':
-            return {
-                'success': True,
-                'title': 'Pinterest Video',
-                'thumbnail': '',
-                'links': [{'url': url, 'quality': 'Best Quality', 'format': 'mp4', 'size': '', 'format_id': None}],
-                'original_url': url,
-            }
         error_msg = str(e)
+        # Platform-specific human-readable errors
+        if 'IP address is blocked' in error_msg or 'IP is blocked' in error_msg:
+            return {'success': False, 'error': 'TikTok has blocked access from this server. Try again later or use a different network.'}
+        if 'cookies' in error_msg.lower() or 'login' in error_msg.lower() or 'empty media response' in error_msg.lower():
+            return {'success': False, 'error': 'This platform requires a logged-in account. Video is not publicly accessible.'}
+        if 'No video could be found' in error_msg:
+            return {'success': False, 'error': 'No video found in this post. Make sure the link contains a video.'}
         if 'Private' in error_msg or 'private' in error_msg:
             return {'success': False, 'error': 'This video is private or unavailable.'}
-        if 'not found' in error_msg.lower() or '404' in error_msg:
-            return {'success': False, 'error': 'Video not found. Please check the URL.'}
-        return {'success': False, 'error': 'Could not extract video. Please check the URL and try again.'}
+        if platform == 'pinterest' and ('404' in error_msg or 'not found' in error_msg.lower()):
+            return {'success': False, 'error': 'Pinterest has blocked access from this server. Try opening the video in your browser and downloading it directly.'}
+        if '404' in error_msg or 'not found' in error_msg.lower():
+            return {'success': False, 'error': 'Video not found. The post may be private, deleted, or region-restricted.'}
+        return {'success': False, 'error': 'Could not extract video. The post may be private or the platform blocked access.'}
     except Exception as e:
         if scraped_links:
             return {
                 'success': True, 'title': 'Video', 'thumbnail': '',
                 'links': scraped_links[:6], 'original_url': url,
-            }
-        # Pinterest fallback on any unexpected error
-        if platform == 'pinterest':
-            return {
-                'success': True,
-                'title': 'Pinterest Video',
-                'thumbnail': '',
-                'links': [{'url': url, 'quality': 'Best Quality', 'format': 'mp4', 'size': '', 'format_id': None}],
-                'original_url': url,
             }
         return {'success': False, 'error': f'Download service error: {str(e)}'}
 
