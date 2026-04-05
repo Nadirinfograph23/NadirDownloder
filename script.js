@@ -239,6 +239,7 @@ const previewDownloads = document.getElementById('previewDownloads');
 
 let currentPlatform = null;
 let isDownloading = false;
+var currentDownloadData = null; // stores links + metadata for active result
 
 // Detect platform from URL
 function detectPlatform(url) {
@@ -409,7 +410,15 @@ function showResults(data, platform) {
     previewTitleText.textContent = titleStr;
     previewTitleText.style.display = 'block';
 
-    // Build download buttons
+    // Store data for download handlers
+    currentDownloadData = {
+        links: data.links,
+        platform: platform,
+        title: data.title || 'video',
+        original_url: data.original_url || ''
+    };
+
+    // Build download buttons (click is intercepted by handleLinkClick)
     var html = '';
     data.links.forEach(function(link, index) {
         var formatLabel = link.format ? link.format.toUpperCase() : 'MP4';
@@ -417,42 +426,152 @@ function showResults(data, platform) {
         var sizeLabel = link.size ? ' - ' + link.size : '';
         var btnClass = index === 0 ? 'preview-download-btn' : 'preview-download-btn secondary';
 
-        // Platforms whose CDN URLs need server-side headers (Referer,
-        // cookies) that the browser won't attach on a plain <a> click.
-        // Pinterest pinimg.com CDN returns S3 XML AccessDenied errors when
-        // accessed directly from the browser — must go through the proxy.
-        var needsProxy = ['tiktok', 'facebook', 'instagram', 'twitter', 'pinterest'];
-        var downloadHref;
-        // TikTok: yt-dlp downloads via original URL + format_id.
-        var ytdlpPlatforms = ['tiktok'];
-        if (ytdlpPlatforms.indexOf(platform) !== -1 && data.original_url) {
-            var safeTitle = (data.title || 'video').replace(/[^\w\s\-]/g, '').trim().substring(0, 60) || 'video';
-            downloadHref = '/api/proxy'
-                + '?url=' + encodeURIComponent(data.original_url)
-                + '&platform=' + encodeURIComponent(platform)
-                + (link.format_id ? '&format_id=' + encodeURIComponent(link.format_id) : '')
-                + '&filename=' + encodeURIComponent(safeTitle)
-                + '&format=' + encodeURIComponent(link.format || 'mp4');
-        } else if (needsProxy.indexOf(platform) !== -1) {
-            var safeTitle = (data.title || 'video').replace(/[^\w\s\-]/g, '').trim().substring(0, 60) || 'video';
-            downloadHref = '/api/proxy'
-                + '?url=' + encodeURIComponent(link.url)
-                + '&platform=' + encodeURIComponent(platform)
-                + '&filename=' + encodeURIComponent(safeTitle)
-                + '&format=' + encodeURIComponent(link.format || 'mp4');
-        } else {
-            downloadHref = link.url;
-        }
-
-        html += '<a href="' + escapeHtml(downloadHref) + '" class="' + btnClass + '" download rel="noopener noreferrer">';
+        html += '<a href="javascript:void(0)" class="' + btnClass + '" id="dl-btn-' + index + '" data-index="' + index + '">';
         html += '  <div class="dl-info">';
-        html += '    <i class="fas fa-download"></i>';
-        html += '    <span>' + escapeHtml(qualityLabel) + escapeHtml(sizeLabel) + '</span>';
+        html += '    <i class="fas fa-download" id="dl-icon-' + index + '"></i>';
+        html += '    <span id="dl-label-' + index + '">' + escapeHtml(qualityLabel) + escapeHtml(sizeLabel) + '</span>';
         html += '  </div>';
-        html += '  <span class="dl-format">' + formatLabel + '</span>';
+        html += '  <span class="dl-format" id="dl-format-' + index + '">' + formatLabel + '</span>';
         html += '</a>';
     });
     previewDownloads.innerHTML = html;
+
+    // Attach click interceptors
+    previewDownloads.querySelectorAll('[data-index]').forEach(function(btn) {
+        btn.addEventListener('click', function(e) {
+            e.preventDefault();
+            handleLinkClick(parseInt(this.getAttribute('data-index')));
+        });
+    });
+}
+
+// ---------- Download helpers ----------
+
+// Build proxy or direct URL for a link
+function _buildProxyUrl(link, platform, originalUrl, title) {
+    var safeTitle = (title || 'video').replace(/[^\w\s\-]/g, '').trim().substring(0, 60) || 'video';
+    var ytdlpPlatforms = ['tiktok'];
+    var needsProxy = ['tiktok', 'facebook', 'instagram', 'twitter', 'pinterest'];
+
+    if (ytdlpPlatforms.indexOf(platform) !== -1 && originalUrl) {
+        return '/api/proxy'
+            + '?url=' + encodeURIComponent(originalUrl)
+            + '&platform=' + encodeURIComponent(platform)
+            + (link.format_id ? '&format_id=' + encodeURIComponent(link.format_id) : '')
+            + '&filename=' + encodeURIComponent(safeTitle)
+            + '&format=' + encodeURIComponent(link.format || 'mp4');
+    } else if (needsProxy.indexOf(platform) !== -1) {
+        return '/api/proxy'
+            + '?url=' + encodeURIComponent(link.url)
+            + '&platform=' + encodeURIComponent(platform)
+            + '&filename=' + encodeURIComponent(safeTitle)
+            + '&format=' + encodeURIComponent(link.format || 'mp4');
+    } else {
+        return link.url;
+    }
+}
+
+// Fetch only headers to verify the URL returns a real video (not XML / error page).
+// Aborts body transfer immediately after headers arrive to avoid wasting bandwidth.
+async function _checkProxyUrl(url) {
+    var controller = new AbortController();
+    try {
+        var resp = await fetch(url, { signal: controller.signal });
+        var ok = resp.ok;
+        var ct = (resp.headers.get('Content-Type') || '').toLowerCase();
+        controller.abort(); // cancel body — we only needed the status + content-type
+        if (!ok) return false;
+        if (ct.includes('xml') || ct.includes('html') || ct.startsWith('text/')) return false;
+        return true;
+    } catch (e) {
+        // AbortError after headers → we aborted ourselves → headers were valid
+        if (e.name === 'AbortError') return true;
+        return false; // network / DNS error
+    }
+}
+
+// Trigger a real browser download for a validated URL
+function _triggerDownload(url, title, format) {
+    var safeTitle = (title || 'video').replace(/[^\w\s\-]/g, '').trim().substring(0, 60) || 'video';
+    var a = document.createElement('a');
+    a.href = url;
+    a.setAttribute('download', safeTitle + '.' + (format || 'mp4'));
+    a.rel = 'noopener noreferrer';
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+}
+
+// Handle a download button click: pre-check URL, auto-fallback to next quality on failure
+async function handleLinkClick(index) {
+    if (!currentDownloadData) return;
+
+    var d = currentDownloadData;
+
+    // All qualities exhausted
+    if (index >= d.links.length) {
+        showToast(t('toast_failed'), 'fas fa-exclamation-triangle');
+        return;
+    }
+
+    var link = d.links[index];
+    var downloadUrl = _buildProxyUrl(link, d.platform, d.original_url, d.title);
+    var btn = document.getElementById('dl-btn-' + index);
+    var iconEl = document.getElementById('dl-icon-' + index);
+    var labelEl = document.getElementById('dl-label-' + index);
+    var fmtEl = document.getElementById('dl-format-' + index);
+
+    // TikTok goes through yt-dlp which is slow to respond headers — skip pre-check
+    var ytdlpPlatforms = ['tiktok'];
+    if (ytdlpPlatforms.indexOf(d.platform) !== -1) {
+        _triggerDownload(downloadUrl, d.title, link.format || 'mp4');
+        showToast(t('toast_ready'), 'fas fa-download');
+        return;
+    }
+
+    // Show checking state
+    if (btn) {
+        btn.style.pointerEvents = 'none';
+        btn.style.opacity = '0.75';
+    }
+    if (iconEl) iconEl.className = 'fas fa-spinner fa-spin';
+    if (labelEl) labelEl.textContent = 'Checking...';
+
+    var isValid = await _checkProxyUrl(downloadUrl);
+
+    if (isValid) {
+        // Restore button, then trigger download
+        var qualityLabel = link.quality || ('Quality ' + (index + 1));
+        var sizeLabel = link.size ? ' - ' + link.size : '';
+        if (btn) {
+            btn.style.pointerEvents = '';
+            btn.style.opacity = '';
+        }
+        if (iconEl) iconEl.className = 'fas fa-download';
+        if (labelEl) labelEl.textContent = qualityLabel + sizeLabel;
+
+        _triggerDownload(downloadUrl, d.title, link.format || 'mp4');
+        showToast(t('toast_ready'), 'fas fa-download');
+    } else {
+        // Mark this quality as unavailable
+        if (btn) {
+            btn.style.pointerEvents = 'none';
+            btn.style.opacity = '0.35';
+        }
+        if (iconEl) iconEl.className = 'fas fa-times-circle';
+        if (labelEl) labelEl.textContent = 'Not available';
+        if (fmtEl) fmtEl.textContent = '✕';
+
+        // Auto-try next quality
+        var next = index + 1;
+        if (next < d.links.length) {
+            showToast('Trying next quality…', 'fas fa-sync-alt');
+            setTimeout(function() { handleLinkClick(next); }, 600);
+        } else {
+            showToast(t('toast_failed'), 'fas fa-exclamation-triangle');
+        }
+    }
 }
 
 // Hide results
