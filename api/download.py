@@ -605,17 +605,20 @@ def extract_video_info(url):
                     seen_urls.add(main_url)
 
         # Facebook-specific fallback: try direct SD/HD URLs from info dict.
+        # Include a format_id so the proxy can re-download via yt-dlp at
+        # click time (avoiding CDN URL expiration that causes proxy.txt).
         if not links and platform == 'facebook':
-            # Try the direct webpage URLs (sd_url / hd_url) that Facebook
-            # sometimes exposes — these are typically muxed.
-            for key in ('sd_url', 'hd_url'):
+            for key in ('hd_url', 'sd_url'):
                 direct_url = info.get(key)
                 if direct_url and direct_url not in seen_urls:
+                    quality = 'HD' if 'hd' in key else 'SD'
+                    fmt_id = 'hd' if 'hd' in key else 'sd'
                     links.append({
                         'url': direct_url,
-                        'quality': 'HD' if 'hd' in key else 'SD',
+                        'quality': quality,
                         'format': 'mp4',
                         'size': '',
+                        'format_id': fmt_id,
                     })
                     seen_urls.add(direct_url)
 
