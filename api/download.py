@@ -24,18 +24,14 @@ import requests as _requests
 from bs4 import BeautifulSoup as _BS
 
 # ── Cookie-file support ───────────────────────────────────────────────────────
-# Place Netscape/Mozilla cookie files (exported by browser extensions like
-# "Get cookies.txt LOCALLY") in the  cookies/  directory at the project root.
 _COOKIE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'cookies')
 
 def _cookie_file(platform: str):
-    """Return path to the cookie file for *platform* if it exists, else None."""
     path = os.path.join(_COOKIE_DIR, f'{platform}.txt')
     return path if os.path.isfile(path) else None
 
 
 def detect_platform(url):
-    """Detect the social media platform from the URL."""
     normalized = url.lower()
     if re.search(r'facebook\.com|fb\.com|fb\.watch|fbcdn\.net', normalized):
         return 'facebook'
@@ -53,7 +49,6 @@ def detect_platform(url):
 
 
 def _format_size(filesize):
-    """Format file size into a human-readable string."""
     if not filesize:
         return ''
     size_mb = filesize / (1024 * 1024)
@@ -63,82 +58,12 @@ def _format_size(filesize):
     return f"{size_kb:.0f} KB"
 
 
-def _pinterest_direct_mp4(formats, links, seen_heights):
-    """Build direct MP4 download links for Pinterest videos.
-
-    Pinterest's CDN hosts muxed (video+audio) MP4 files at a predictable
-    path derived from the HLS manifest URL::
-
-        HLS:    https://v1.pinimg.com/videos/iht/hls/<hash>_<width>w.m3u8
-        Direct: https://v1.pinimg.com/videos/mc/720p/<hash>.mp4
-
-    The mc/720p MP4 already contains both video and audio, so it can
-    be proxied directly without needing ffmpeg to merge separate streams.
-    This function also tries v2 CDN path variants and multiple resolutions.
-    """
-    # More flexible regex: matches any pinimg.com subdomain and any HLS path variant.
-    HLS_RE = re.compile(
-        r'(https://[^/]*\.pinimg\.com)/videos/(?:[^/]+/)*hls/(.+?)_\w+\.m3u8'
-    )
-
-    cdn_base = None
-    video_hash = None
-    best_height = None
-
-    for f in formats:
-        f_url = f.get('url', '')
-        m = HLS_RE.match(f_url)
-        if m:
-            cdn_base = m.group(1)  # e.g. https://v1.pinimg.com
-            video_hash = m.group(2)
-            h = f.get('height')
-            if h and (best_height is None or h > best_height):
-                best_height = h
-
-    if not video_hash:
-        return
-
-    # Default base if not found from HLS URL
-    if not cdn_base:
-        cdn_base = 'https://v1.pinimg.com'
-
-    # Offer multiple resolutions; the CDN serves 720p and v2/720p variants.
-    resolutions = [
-        ('720p', f'{cdn_base}/videos/mc/720p/{video_hash}.mp4'),
-        ('480p', f'{cdn_base}/videos/mc/480p/{video_hash}.mp4'),
-        ('v2/720p', f'{cdn_base}/videos/mc/v2/720p/{video_hash}.mp4'),
-    ]
-
-    added = False
-    for label, url in resolutions:
-        res_num = int(label.split('/')[-1].replace('p', '')) if label[-1] == 'p' else 720
-        if res_num not in seen_heights:
-            seen_heights.add(res_num)
-            links.append({
-                'url': url,
-                'quality': label,
-                'format': 'mp4',
-                'size': '',
-            })
-            added = True
-
-    # If nothing was added (all heights already seen), force-add the 720p variant.
-    if not added:
-        links.append({
-            'url': f'{cdn_base}/videos/mc/720p/{video_hash}.mp4',
-            'quality': '720p',
-            'format': 'mp4',
-            'size': '',
-        })
-
-
 _BROWSER_UA = (
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
     'AppleWebKit/537.36 (KHTML, like Gecko) '
     'Chrome/124.0.0.0 Safari/537.36'
 )
 
-# Platform-specific headers used when testing CDN URLs for validity
 _PLATFORM_TEST_HEADERS = {
     'facebook':  {'User-Agent': _BROWSER_UA, 'Referer': 'https://www.facebook.com/'},
     'instagram': {'User-Agent': _BROWSER_UA, 'Referer': 'https://www.instagram.com/'},
@@ -149,13 +74,6 @@ _PLATFORM_TEST_HEADERS = {
 
 
 def _test_url(url, headers=None, timeout=5):
-    """
-    Quick HEAD request to check whether a CDN URL is alive and serves video.
-
-    Returns True  → URL looks valid (keep it).
-    Returns False → URL returned an explicit 4xx/5xx or an XML/HTML error page.
-    Returns True  → on timeout or network error (give benefit of the doubt).
-    """
     try:
         r = _requests.head(
             url,
@@ -166,25 +84,14 @@ def _test_url(url, headers=None, timeout=5):
         if r.status_code >= 400:
             return False
         ct = r.headers.get('Content-Type', '').lower()
-        # Reject XML / HTML error pages (e.g. AWS S3 AccessDenied)
         if 'xml' in ct or 'html' in ct:
             return False
         return True
     except Exception:
-        # Timeout or connection error — keep the link (don't punish slow CDNs)
         return True
 
 
 def _filter_working_links(links, platform):
-    """
-    Test each CDN URL concurrently and remove broken ones.
-
-    TikTok is excluded: its proxy always re-downloads via yt-dlp using the
-    original page URL, so the extracted CDN URLs are never used directly.
-
-    If every URL fails the test the original list is returned unchanged
-    (better to show something than an empty result set).
-    """
     if platform == 'tiktok' or not links:
         return links
 
@@ -197,32 +104,274 @@ def _filter_working_links(links, platform):
         results = list(ex.map(_check, links))
 
     working = [link for ok, link in results if ok]
-    return working if working else links  # fallback: keep all if all failed
+    return working if working else links
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Pinterest Scraper — direct page extraction (primary method)
+# ─────────────────────────────────────────────────────────────────────────────
+def _resolve_pinterest_url(url):
+    if 'pin.it' not in url.lower():
+        return url
+    try:
+        r = _requests.get(
+            url,
+            headers={'User-Agent': _BROWSER_UA, 'Accept': 'text/html'},
+            timeout=12,
+            allow_redirects=True,
+        )
+        for resp in list(r.history) + [r]:
+            m = re.search(r'/pin/(\d+)/', resp.url)
+            if m:
+                return f'https://www.pinterest.com/pin/{m.group(1)}/'
+    except Exception:
+        pass
+    return url
+
+
+def _extract_pin_id(url):
+    m = re.search(r'/pin/(\d+)', url)
+    return m.group(1) if m else None
+
+
+def _fetch_pinterest_video(url):
+    """
+    Multi-strategy Pinterest video extractor.
+
+    Strategy 1: Pinterest internal API (v3/pins endpoint) — fastest, most reliable.
+    Strategy 2: Scrape the page HTML and extract pinimg.com mp4 / m3u8 URLs.
+    Strategy 3: savepin.app fallback.
+    """
+    url = _resolve_pinterest_url(url)
+    pin_id = _extract_pin_id(url)
+
+    # ── Strategy 1: Pinterest v3 API ────────────────────────────────────────
+    if pin_id:
+        links = _pinterest_api_v3(pin_id)
+        if links:
+            return links
+
+    # ── Strategy 2: Direct page scraping ────────────────────────────────────
+    links = _pinterest_page_scrape(url)
+    if links:
+        return links
+
+    # ── Strategy 3: savepin.app ──────────────────────────────────────────────
+    return _fetch_pinterest_savepin(url)
+
+
+def _pinterest_api_v3(pin_id):
+    """Use Pinterest's internal JSON API to get video URLs."""
+    endpoints = [
+        f'https://www.pinterest.com/resource/PinResource/get/?source_url=/pin/{pin_id}/&data={{"options":{{"id":"{pin_id}","field_set_key":"detailed"}}}}',
+        f'https://www.pinterest.com/resource/VideoResource/get/?source_url=/pin/{pin_id}/&data={{"options":{{"id":"{pin_id}"}}}}',
+    ]
+
+    headers = {
+        'User-Agent': _BROWSER_UA,
+        'Accept': 'application/json, text/javascript, */*; q=0.01',
+        'X-Requested-With': 'XMLHttpRequest',
+        'Referer': f'https://www.pinterest.com/pin/{pin_id}/',
+    }
+
+    for endpoint in endpoints:
+        try:
+            resp = _requests.get(endpoint, headers=headers, timeout=15)
+            if resp.status_code != 200:
+                continue
+            data = resp.json()
+            links = _parse_pinterest_api_response(data)
+            if links:
+                return links
+        except Exception:
+            continue
+    return []
+
+
+def _parse_pinterest_api_response(data):
+    """Recursively search Pinterest API JSON for video URLs."""
+    links = []
+    text = json.dumps(data)
+
+    # Extract direct pinimg mp4 URLs
+    mp4_urls = re.findall(r'https://v\d+\.pinimg\.com/videos/[^"\'\\]+\.mp4', text)
+    m3u8_urls = re.findall(r'https://v\d+\.pinimg\.com/videos/[^"\'\\]+\.m3u8', text)
+
+    seen = set()
+
+    for mp4_url in mp4_urls:
+        mp4_url = mp4_url.replace('\\/', '/')
+        if mp4_url in seen:
+            continue
+        seen.add(mp4_url)
+        quality = '720p'
+        if '1080p' in mp4_url:
+            quality = '1080p'
+        elif '480p' in mp4_url:
+            quality = '480p'
+        elif '360p' in mp4_url:
+            quality = '360p'
+        elif 'V_720P' in mp4_url or '720p' in mp4_url:
+            quality = '720p'
+        links.append({'url': mp4_url, 'quality': quality, 'format': 'mp4', 'size': ''})
+
+    # Convert HLS manifest URLs to direct MP4
+    for m3u8_url in m3u8_urls:
+        m3u8_url = m3u8_url.replace('\\/', '/')
+        mp4_url = _hls_to_direct_mp4(m3u8_url)
+        if mp4_url and mp4_url not in seen:
+            seen.add(mp4_url)
+            quality = '720p'
+            if '480p' in mp4_url:
+                quality = '480p'
+            links.append({'url': mp4_url, 'quality': quality, 'format': 'mp4', 'size': ''})
+
+    return links
+
+
+def _hls_to_direct_mp4(m3u8_url):
+    """
+    Pinterest HLS manifests follow this pattern:
+      https://v1.pinimg.com/videos/iht/hls/<hash>_720w.m3u8
+    The muxed MP4 is at:
+      https://v1.pinimg.com/videos/mc/720p/<hash>.mp4
+    """
+    HLS_RE = re.compile(
+        r'(https://[^/]*\.pinimg\.com)/videos/(?:[^/]+/)*hls/(.+?)(?:_\w+)?\.m3u8'
+    )
+    m = HLS_RE.match(m3u8_url)
+    if not m:
+        return None
+    cdn_base = m.group(1)
+    video_hash = m.group(2)
+    # Remove trailing resolution suffix like _720w if still present
+    video_hash = re.sub(r'_\d+w$', '', video_hash)
+    return f'{cdn_base}/videos/mc/720p/{video_hash}.mp4'
+
+
+def _pinterest_page_scrape(url):
+    """Scrape the Pinterest page HTML and extract video URLs from embedded JS data."""
+    headers = {
+        'User-Agent': _BROWSER_UA,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': 'https://www.pinterest.com/',
+    }
+    try:
+        resp = _requests.get(url, headers=headers, timeout=15, allow_redirects=True)
+        if resp.status_code != 200:
+            return []
+
+        html = resp.text
+        links = []
+        seen = set()
+
+        # Look for pinimg.com video URLs directly in the page
+        mp4_urls = re.findall(r'https://v\d+\.pinimg\.com/videos/[^"\'\\&\s]+\.mp4', html)
+        m3u8_urls = re.findall(r'https://v\d+\.pinimg\.com/videos/[^"\'\\&\s]+\.m3u8', html)
+
+        for mp4_url in mp4_urls:
+            mp4_url = mp4_url.replace('\\u002F', '/').replace('\\/', '/')
+            if mp4_url in seen:
+                continue
+            seen.add(mp4_url)
+            quality = 'HD'
+            for q in ['1080p', '720p', '480p', '360p']:
+                if q in mp4_url:
+                    quality = q
+                    break
+            links.append({'url': mp4_url, 'quality': quality, 'format': 'mp4', 'size': ''})
+
+        for m3u8_url in m3u8_urls:
+            m3u8_url = m3u8_url.replace('\\u002F', '/').replace('\\/', '/')
+            mp4_url = _hls_to_direct_mp4(m3u8_url)
+            if mp4_url and mp4_url not in seen:
+                seen.add(mp4_url)
+                links.append({'url': mp4_url, 'quality': '720p', 'format': 'mp4', 'size': ''})
+
+        # Also look inside JSON-LD or script tags
+        soup = _BS(html, 'html.parser')
+        for script in soup.find_all('script'):
+            content = script.string or ''
+            if 'pinimg.com' not in content:
+                continue
+            extra_mp4 = re.findall(r'https://v\d+\.pinimg\.com/videos/[^"\'\\&\s]+\.mp4', content)
+            for u in extra_mp4:
+                u = u.replace('\\/', '/')
+                if u not in seen:
+                    seen.add(u)
+                    q = '720p'
+                    for res in ['1080p', '720p', '480p', '360p']:
+                        if res in u:
+                            q = res
+                            break
+                    links.append({'url': u, 'quality': q, 'format': 'mp4', 'size': ''})
+
+        return links
+    except Exception:
+        return []
+
+
+def _fetch_pinterest_savepin(url):
+    """Fallback: extract Pinterest video via savepin.app."""
+    encoded_url = urllib.parse.quote(url, safe='')
+    api_url = (
+        f'https://www.savepin.app/download.php'
+        f'?url={encoded_url}&lang=en&type=redirect'
+    )
+    headers = {
+        'User-Agent': _BROWSER_UA,
+        'Accept': 'text/html,application/xhtml+xml,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': 'https://www.savepin.app/',
+    }
+
+    try:
+        resp = _requests.get(api_url, headers=headers, timeout=20, allow_redirects=True)
+        soup = _BS(resp.text, 'html.parser')
+        links = []
+        _IMAGE_FMTS = {'jpg', 'jpeg', 'png', 'gif', 'webp', 'avif'}
+
+        for row in soup.select('tbody tr'):
+            tds = row.find_all('td')
+            a_el = row.select_one('a[href]')
+            if not a_el:
+                continue
+            href = a_el.get('href', '')
+            parsed = urllib.parse.urlparse(href)
+            qs = urllib.parse.parse_qs(parsed.query)
+            direct_url = qs.get('url', [href])[0]
+            quality_el = row.select_one('.video-quality')
+            quality = (quality_el.text.strip() if quality_el
+                       else (tds[0].text.strip() if tds else 'Unknown'))
+            fmt = tds[1].text.strip().lower() if len(tds) > 1 else 'mp4'
+            if fmt in _IMAGE_FMTS or quality.lower() in ('thumbnail', 'image'):
+                continue
+            if direct_url and direct_url.startswith('http'):
+                links.append({
+                    'url': direct_url,
+                    'quality': quality,
+                    'format': fmt or 'mp4',
+                    'size': '',
+                })
+        return links[:4]
+    except Exception:
+        return []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Facebook Scraper
+# ─────────────────────────────────────────────────────────────────────────────
 def _fetch_facebook_video(url):
-    """
-    Extract Facebook video links via fdown.net.
-
-    Flow:
-      1. Seed session cookies from fdown.net homepage.
-      2. POST the Facebook URL to fdown.net/download.php.
-      3. Parse the returned HTML for HD / SD download anchors.
-    Returns a list of link dicts [{url, quality, format, size}].
-    """
     session = _requests.Session()
     base_headers = {
         'User-Agent': _BROWSER_UA,
         'Accept-Language': 'en-US,en;q=0.9',
     }
-
-    # Step 1 — seed cookies
     try:
         session.get('https://fdown.net/', headers=base_headers, timeout=10)
     except Exception:
         pass
-
-    # Step 2 — POST URL to fdown.net
     try:
         resp = session.post(
             'https://fdown.net/download.php',
@@ -239,21 +388,16 @@ def _fetch_facebook_video(url):
         )
     except Exception:
         return []
-
     if resp.status_code != 200:
         return []
-
-    # Step 3 — parse anchors for SD / HD links
     soup = _BS(resp.text, 'html.parser')
     links = []
     seen = set()
-
     for a in soup.find_all('a', href=True):
         href = a.get('href', '')
         text = a.get_text(separator=' ').strip()
         if not href or href in seen:
             continue
-        # fdown.net labels: "Download Video in Normal Quality" (SD) and "Download Video in HD Quality" (HD)
         text_upper = text.upper()
         is_sd = 'NORMAL' in text_upper or ('DOWNLOAD' in text_upper and 'QUALITY' in text_upper and 'HD' not in text_upper)
         is_hd = 'HD' in text_upper and 'DOWNLOAD' in text_upper
@@ -261,8 +405,6 @@ def _fetch_facebook_video(url):
             seen.add(href)
             quality = 'HD' if is_hd else 'SD'
             links.append({'url': href, 'quality': quality, 'format': 'mp4', 'size': ''})
-
-    # Fallback: any fbcdn.net anchor on the page
     if not links:
         for a in soup.find_all('a', href=True):
             href = a.get('href', '')
@@ -270,134 +412,24 @@ def _fetch_facebook_video(url):
                 seen.add(href)
                 quality = 'HD' if 'hd' in href.lower() else 'SD'
                 links.append({'url': href, 'quality': quality, 'format': 'mp4', 'size': ''})
-
     return links[:4]
 
 
-def _resolve_pinterest_url(url):
-    """
-    Resolve a pin.it short URL to a clean pinterest.com/pin/<id>/ URL.
-    pin.it redirects through Pinterest's API, so we follow the chain and
-    extract the numeric pin ID from whichever hop contains it.
-    Non-pin.it URLs are returned unchanged.
-    """
-    if 'pin.it' not in url.lower():
-        return url
-    try:
-        r = _requests.get(
-            url,
-            headers={'User-Agent': _BROWSER_UA, 'Accept': 'text/html'},
-            timeout=12,
-            allow_redirects=True,
-        )
-        # Walk the redirect chain (including the final response URL)
-        for resp in list(r.history) + [r]:
-            m = re.search(r'/pin/(\d+)/', resp.url)
-            if m:
-                return f'https://www.pinterest.com/pin/{m.group(1)}/'
-    except Exception:
-        pass
-    return url
-
-
-def _fetch_pinterest_video(url):
-    """
-    Extract Pinterest video links via savepin.app — the same service used by
-    the reference repo (milancodess/universalDownloader).
-
-    pin.it short URLs are resolved to a full pinterest.com/pin/<id>/ URL
-    before calling savepin.app, because savepin.app cannot handle short URLs.
-    Returns a list of link dicts [{url, quality, format, size}].
-    """
-    url = _resolve_pinterest_url(url)
-    encoded_url = urllib.parse.quote(url, safe='')
-    api_url = (
-        f'https://www.savepin.app/download.php'
-        f'?url={encoded_url}&lang=en&type=redirect'
-    )
-    headers = {
-        'User-Agent': _BROWSER_UA,
-        'Accept': (
-            'text/html,application/xhtml+xml,application/xml;'
-            'q=0.9,image/avif,image/webp,*/*;q=0.8'
-        ),
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Referer': 'https://www.savepin.app/',
-        'sec-ch-ua': '"Not)A;Brand";v="8", "Chromium";v="124"',
-        'sec-ch-ua-mobile': '?0',
-        'sec-fetch-dest': 'document',
-        'sec-fetch-mode': 'navigate',
-        'sec-fetch-site': 'same-origin',
-        'upgrade-insecure-requests': '1',
-    }
-
-    try:
-        resp = _requests.get(api_url, headers=headers, timeout=20, allow_redirects=True)
-        soup = _BS(resp.text, 'html.parser')
-        links = []
-
-        _IMAGE_FMTS = {'jpg', 'jpeg', 'png', 'gif', 'webp', 'avif'}
-
-        for row in soup.select('tbody tr'):
-            tds = row.find_all('td')
-            a_el = row.select_one('a[href]')
-            if not a_el:
-                continue
-
-            href = a_el.get('href', '')
-            # savepin.app wraps links as force-save.php?url=<encoded_direct_url>
-            # or /download?url=<encoded_direct_url>
-            parsed = urllib.parse.urlparse(href)
-            qs = urllib.parse.parse_qs(parsed.query)
-            direct_url = qs.get('url', [href])[0]
-
-            quality_el = row.select_one('.video-quality')
-            quality = (quality_el.text.strip() if quality_el
-                       else (tds[0].text.strip() if tds else 'Unknown'))
-            fmt = tds[1].text.strip().lower() if len(tds) > 1 else 'mp4'
-
-            # Skip image-only entries (thumbnail rows) — only keep video formats
-            if fmt in _IMAGE_FMTS or quality.lower() in ('thumbnail', 'image'):
-                continue
-
-            if direct_url and direct_url.startswith('http'):
-                links.append({
-                    'url': direct_url,
-                    'quality': quality,
-                    'format': fmt or 'mp4',
-                    'size': '',
-                })
-
-        return links[:4]
-
-    except Exception:
-        return []
-
-
+# ─────────────────────────────────────────────────────────────────────────────
+# Main extraction
+# ─────────────────────────────────────────────────────────────────────────────
 def extract_video_info(url):
-    """
-    Extract video info and download links.
-    Facebook and Pinterest use direct page-scraping (more reliable).
-    All other platforms (and as fallback) use yt-dlp.
-    """
     platform = detect_platform(url)
 
-    # Resolve pin.it short URLs to a clean pinterest.com/pin/<id>/ URL so
-    # that both the scraping path and yt-dlp receive a canonical URL.
     if platform == 'pinterest':
         url = _resolve_pinterest_url(url)
 
-    # --- Scraping for Facebook (fdown.net) and Pinterest ---
-    # Facebook: use fdown.net which returns direct fbcdn.net CDN URLs that
-    # the proxy can stream immediately — no yt-dlp needed in the proxy.
-    # Pinterest: use savepin.app for fast, reliable CDN URLs.
     scraped_links = []
     if platform == 'facebook':
         scraped_links = _fetch_facebook_video(url)
     elif platform == 'pinterest':
         scraped_links = _fetch_pinterest_video(url)
 
-    # ── Base yt-dlp options ───────────────────────────────────────────────────
     _UA_DESKTOP = (
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
         'AppleWebKit/537.36 (KHTML, like Gecko) '
@@ -408,44 +440,86 @@ def extract_video_info(url):
         'AppleWebKit/605.1.15 (KHTML, like Gecko) '
         'Version/17.0 Mobile/15E148 Safari/604.1'
     )
+    _UA_ANDROID = (
+        'com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip'
+    )
 
     base_ydl_opts = {
         'quiet': True,
         'no_warnings': True,
         'skip_download': True,
         'noplaylist': True,
-        'socket_timeout': 20,
+        'socket_timeout': 25,
         'extractor_retries': 3,
         'http_headers': {'User-Agent': _UA_DESKTOP},
     }
 
-    # Attach cookie file if available (enables auth for Instagram, Twitter, etc.)
     cf = _cookie_file(platform)
     if cf:
         base_ydl_opts['cookiefile'] = cf
 
     # ── Per-platform retry option sets ───────────────────────────────────────
-    # Each set is tried in order; the first that succeeds wins.
-    # This handles temporary extractor quirks, header changes, and soft IP blocks.
+    # YouTube: use Android/iOS player clients — these bypass server IP blocks
+    # and don't require po_token (proof of origin) that the web client needs.
     _PLATFORM_RETRY_SETS = {
+        'youtube': [
+            # Attempt 1: Android client — most reliable from server IPs
+            {
+                'http_headers': {'User-Agent': _UA_ANDROID},
+                'extractor_args': {
+                    'youtube': {
+                        'player_client': ['android'],
+                        'player_skip': ['configs', 'webpage'],
+                    }
+                },
+            },
+            # Attempt 2: iOS client
+            {
+                'http_headers': {'User-Agent': _UA_MOBILE},
+                'extractor_args': {
+                    'youtube': {
+                        'player_client': ['ios'],
+                        'player_skip': ['configs'],
+                    }
+                },
+            },
+            # Attempt 3: TV embedded client (no sign-in required)
+            {
+                'http_headers': {'User-Agent': _UA_DESKTOP},
+                'extractor_args': {
+                    'youtube': {
+                        'player_client': ['tv_embedded'],
+                    }
+                },
+            },
+            # Attempt 4: mweb client (mobile web — different API path)
+            {
+                'http_headers': {'User-Agent': _UA_MOBILE},
+                'extractor_args': {
+                    'youtube': {
+                        'player_client': ['mweb'],
+                    }
+                },
+            },
+            # Attempt 5: bare default with age bypass
+            {
+                'http_headers': {'User-Agent': _UA_DESKTOP},
+                'age_limit': 99,
+            },
+        ],
         'tiktok': [
-            # Attempt 1: mobile API endpoint (bypasses some IP bans)
             {
                 'http_headers': {'User-Agent': _UA_MOBILE, 'Referer': 'https://www.tiktok.com/'},
                 'extractor_args': {'tiktok': {'api_hostname': ['api16-normal-c-useast1a.tiktokv.com']}},
             },
-            # Attempt 2: desktop + different app name
             {
                 'http_headers': {'User-Agent': _UA_DESKTOP, 'Referer': 'https://www.tiktok.com/'},
                 'extractor_args': {'tiktok': {'app_name': ['musical_ly'], 'app_version': ['34.1.2']}},
             },
-            # Attempt 3: bare desktop, let yt-dlp decide
             {'http_headers': {'User-Agent': _UA_DESKTOP}},
         ],
         'instagram': [
-            # Attempt 1: mobile UA (Instagram sometimes serves public content to mobile)
             {'http_headers': {'User-Agent': _UA_MOBILE}},
-            # Attempt 2: desktop
             {'http_headers': {'User-Agent': _UA_DESKTOP}},
         ],
         'twitter': [
@@ -453,11 +527,11 @@ def extract_video_info(url):
             {'http_headers': {'User-Agent': _UA_MOBILE}},
         ],
         'pinterest': [
-            {'http_headers': {'User-Agent': _UA_DESKTOP, 'Referer': 'https://www.pinterest.com/'}},
+            {
+                'http_headers': {'User-Agent': _UA_DESKTOP, 'Referer': 'https://www.pinterest.com/'},
+                'extractor_args': {'pinterest': {}},
+            },
             {'http_headers': {'User-Agent': _UA_MOBILE}},
-        ],
-        'youtube': [
-            {'http_headers': {'User-Agent': _UA_DESKTOP}},
         ],
         'facebook': [
             {'http_headers': {'User-Agent': _UA_DESKTOP, 'Referer': 'https://www.facebook.com/'}},
@@ -465,12 +539,10 @@ def extract_video_info(url):
     }
 
     def _ydlp_extract_chain(url, platform):
-        """Try each option set for the platform; return info dict on first success."""
         retry_sets = _PLATFORM_RETRY_SETS.get(platform, [{'http_headers': {'User-Agent': _UA_DESKTOP}}])
         last_exc = None
         for extra in retry_sets:
             opts = {**base_ydl_opts, **extra}
-            # Per-set cookie override keeps the cookie file even if extra overrides headers
             if cf and 'cookiefile' not in opts:
                 opts['cookiefile'] = cf
             try:
@@ -480,10 +552,13 @@ def extract_video_info(url):
                         return info
             except yt_dlp.utils.DownloadError as exc:
                 last_exc = exc
-                # If it's a hard auth/cookie error, no point retrying with same platform
                 msg = str(exc).lower()
-                if 'login' in msg or 'private' in msg or 'unavailable' in msg:
-                    break
+                # For YouTube, always try all clients — 'login' from one client
+                # doesn't mean all clients will fail (Android/iOS often succeed
+                # where the web client gets bot-detected and asks for sign-in).
+                if platform != 'youtube':
+                    if 'private' in msg or 'unavailable' in msg:
+                        break
                 continue
             except Exception as exc:
                 last_exc = exc
@@ -493,7 +568,6 @@ def extract_video_info(url):
         return None
 
     # Facebook: fdown.net already gave us direct fbcdn.net CDN URLs.
-    # yt-dlp cannot parse Facebook pages from server environments, so skip it.
     if platform == 'facebook':
         if scraped_links:
             working = _filter_working_links(scraped_links, platform)
@@ -507,11 +581,21 @@ def extract_video_info(url):
             }
         return {'success': False, 'error': 'Could not extract Facebook video. The video may be private or unavailable.'}
 
+    # Pinterest: if direct scraping worked, return immediately without yt-dlp
+    if platform == 'pinterest' and scraped_links:
+        return {
+            'success': True,
+            'title': 'Pinterest Video',
+            'thumbnail': '',
+            'links': scraped_links[:6],
+            'original_url': url,
+            'platform': platform,
+        }
+
     try:
         info = _ydlp_extract_chain(url, platform)
 
         if not info:
-            # yt-dlp returned nothing — if scraping worked use those links
             if scraped_links:
                 return {
                     'success': True, 'title': 'Video', 'thumbnail': '',
@@ -525,7 +609,6 @@ def extract_video_info(url):
         duration = info.get('duration')
         formats = info.get('formats', [])
 
-        # --- If scraping already found links, combine with yt-dlp metadata ---
         if scraped_links:
             result = {
                 'success': True,
@@ -533,6 +616,7 @@ def extract_video_info(url):
                 'thumbnail': thumbnail,
                 'links': scraped_links[:6],
                 'original_url': url,
+                'platform': platform,
             }
             if duration:
                 minutes = int(duration // 60)
@@ -540,9 +624,8 @@ def extract_video_info(url):
                 result['duration'] = f"{minutes}:{seconds:02d}"
             return result
 
-        # Separate formats into categories
-        muxed_formats = []   # has both video + audio
-        video_only = []      # video only (no audio)
+        muxed_formats = []
+        video_only = []
         seen_urls = set()
 
         for f in formats:
@@ -551,23 +634,20 @@ def extract_video_info(url):
                 continue
 
             protocol = f.get('protocol', '')
-            if protocol in ('m3u8', 'm3u8_native', 'http_dash_segments'):
+            # For Pinterest, allow HLS/m3u8 formats so we can convert them
+            if protocol in ('m3u8', 'm3u8_native', 'http_dash_segments') and platform != 'pinterest':
                 continue
-            # Allow dash protocol for Facebook and Instagram to capture more formats
             if protocol == 'dash' and platform not in ('facebook', 'instagram', 'tiktok', 'pinterest'):
                 continue
 
             vcodec = f.get('vcodec', 'none')
             acodec = f.get('acodec', 'none')
-
             ext = f.get('ext', 'mp4')
             height = f.get('height')
             filesize = f.get('filesize') or f.get('filesize_approx')
             has_audio = acodec != 'none'
             has_video = vcodec != 'none'
 
-            # Pinterest V_720P format reports vcodec=None / acodec=None
-            # but is actually a muxed direct MP4.  Treat it as muxed.
             if not has_video and not has_audio and ext == 'mp4' and height:
                 has_video = True
                 has_audio = True
@@ -583,6 +663,7 @@ def extract_video_info(url):
                 'tbr': f.get('tbr') or 0,
                 'abr': f.get('abr') or 0,
                 'format_id': f.get('format_id', ''),
+                'protocol': protocol,
             }
             seen_urls.add(f_url)
 
@@ -591,10 +672,26 @@ def extract_video_info(url):
             elif has_video and not has_audio:
                 video_only.append(entry)
 
-        # Build links: prefer muxed (audio+video) formats
-        links = []
+        # Pinterest: convert HLS m3u8 entries to direct mp4 CDN URLs
+        if platform == 'pinterest':
+            converted = []
+            seen_mp4 = set()
+            for f in muxed_formats:
+                if f.get('protocol') in ('m3u8', 'm3u8_native'):
+                    mp4_url = _hls_to_direct_mp4(f['url'])
+                    if mp4_url and mp4_url not in seen_mp4:
+                        seen_mp4.add(mp4_url)
+                        f2 = dict(f)
+                        f2['url'] = mp4_url
+                        f2['protocol'] = 'https'
+                        converted.append(f2)
+                else:
+                    if f['url'] not in seen_mp4:
+                        seen_mp4.add(f['url'])
+                        converted.append(f)
+            muxed_formats = converted
 
-        # Sort muxed formats by resolution descending, prefer mp4
+        links = []
         muxed_formats.sort(
             key=lambda x: (x['height'] or 0, x['ext'] == 'mp4', x['tbr']),
             reverse=True,
@@ -618,13 +715,8 @@ def extract_video_info(url):
                 link_entry['format_id'] = vf['format_id']
             links.append(link_entry)
 
-        # ── YouTube HD quality tiers via merged format strings ──────────────────
-        # YouTube's HD formats (720p+) are always video-only streams.
-        # We pair each mp4 video stream with the best m4a audio stream and
-        # store the combined format_id (e.g. "399+140"). At download time the
-        # proxy calls yt-dlp which uses ffmpeg to merge them into a single mp4.
+        # ── YouTube HD quality tiers via merged format strings ──────────────
         if platform == 'youtube' and video_only:
-            # Find the best m4a audio-only format for clean mp4 output
             best_audio = None
             for f in formats:
                 is_audio_only = (f.get('acodec', 'none') != 'none'
@@ -638,7 +730,6 @@ def extract_video_info(url):
                 audio_size = (best_audio.get('filesize')
                               or best_audio.get('filesize_approx') or 0)
 
-                # Only mp4 video streams → clean mp4 output after ffmpeg merge
                 yt_video_mp4 = [f for f in video_only if f.get('ext') == 'mp4']
                 yt_video_mp4.sort(key=lambda x: (x['height'] or 0), reverse=True)
 
@@ -653,20 +744,29 @@ def extract_video_info(url):
                     total_size = (vf.get('filesize') or vf.get('filesize_approx') or 0) + audio_size
 
                     links.append({
-                        'url': vf['url'],       # unused — proxy uses original_url
+                        'url': vf['url'],
                         'quality': f'{h}p',
                         'format': 'mp4',
                         'size': _format_size(total_size) if total_size else '',
                         'format_id': merged_id,
                     })
 
-        # ── Pinterest: ensure at least one link via yt-dlp re-extract ────────
-        # Pinterest downloads are always re-extracted server-side at click time,
-        # so CDN URL accuracy here doesn't matter — we just need display entries.
+        # ── Pinterest fallback: last resort entry ─────────────────────────────
         if platform == 'pinterest' and not links:
             all_formats = info.get('formats', [])
-            _pinterest_direct_mp4(all_formats, links, seen_heights)
-            # Last resort: single "Best Quality" entry — proxy handles fresh dl
+            # Try to derive direct mp4 URLs from any HLS in formats
+            for f in all_formats:
+                f_url = f.get('url', '')
+                if '.m3u8' in f_url:
+                    mp4_url = _hls_to_direct_mp4(f_url)
+                    if mp4_url:
+                        links.append({
+                            'url': mp4_url,
+                            'quality': '720p',
+                            'format': 'mp4',
+                            'size': '',
+                        })
+                        break
             if not links:
                 links.append({
                     'url': url,
@@ -676,13 +776,11 @@ def extract_video_info(url):
                     'format_id': None,
                 })
 
-        # Re-sort all links by resolution descending
         links.sort(
             key=lambda x: int(x['quality'].replace('p', '')) if x['quality'].endswith('p') else 0,
             reverse=True,
         )
 
-        # Fallback: use the main URL if no formats were extracted
         if not links and info.get('url'):
             fallback_entry = {
                 'url': info['url'],
@@ -694,7 +792,6 @@ def extract_video_info(url):
                 fallback_entry['format_id'] = info['format_id']
             links.append(fallback_entry)
 
-        # Fallback: try requested_formats (used by yt-dlp for merged formats)
         if not links and info.get('requested_formats'):
             for rf in info['requested_formats']:
                 rf_url = rf.get('url')
@@ -704,8 +801,6 @@ def extract_video_info(url):
                 rf_acodec = rf.get('acodec', 'none')
                 rf_has_video = rf_vcodec != 'none'
                 rf_has_audio = rf_acodec != 'none'
-                # Skip audio-only or video-only streams for Instagram;
-                # only include formats that have both video and audio.
                 if platform in ('instagram', 'tiktok', 'pinterest') and not (rf_has_video and rf_has_audio):
                     continue
                 if rf_has_video:
@@ -720,7 +815,6 @@ def extract_video_info(url):
                         rf_entry['format_id'] = rf['format_id']
                     links.append(rf_entry)
 
-        # Instagram-specific fallback: use the main video URL which is usually muxed.
         if not links and platform == 'instagram' and info.get('url'):
             main_url = info['url']
             if main_url not in seen_urls:
@@ -732,10 +826,7 @@ def extract_video_info(url):
                     'format': info.get('ext', 'mp4'),
                     'size': _format_size(info.get('filesize') or info.get('filesize_approx')),
                 })
-                seen_urls.add(main_url)
 
-        # TikTok-specific fallback: the main URL from yt-dlp is usually a
-        # muxed (video+audio) stream that works well for direct download.
         if not links and platform == 'tiktok' and info.get('url'):
             main_url = info['url']
             if main_url not in seen_urls:
@@ -750,45 +841,7 @@ def extract_video_info(url):
                 if info.get('format_id'):
                     tk_entry['format_id'] = info['format_id']
                 links.append(tk_entry)
-                seen_urls.add(main_url)
 
-        # Pinterest-specific fallback: if the main URL is a direct MP4, use it.
-        # If it is an HLS manifest, try to derive a direct CDN MP4 URL from it.
-        if not links and platform == 'pinterest':
-            main_url = info.get('url', '')
-            if main_url and main_url not in seen_urls:
-                HLS_RE = re.compile(
-                    r'(https://[^/]*\.pinimg\.com)/videos/(?:[^/]+/)*hls/(.+?)_\w+\.m3u8'
-                )
-                hls_m = HLS_RE.match(main_url)
-                if hls_m:
-                    cdn_base = hls_m.group(1)
-                    video_hash = hls_m.group(2)
-                    direct_url = f'{cdn_base}/videos/mc/720p/{video_hash}.mp4'
-                    links.append({
-                        'url': direct_url,
-                        'quality': '720p',
-                        'format': 'mp4',
-                        'size': '',
-                    })
-                    seen_urls.add(direct_url)
-                elif not main_url.endswith('.m3u8'):
-                    height = info.get('height')
-                    label = f"{height}p" if height else 'Best Quality'
-                    pin_entry = {
-                        'url': main_url,
-                        'quality': label,
-                        'format': info.get('ext', 'mp4'),
-                        'size': _format_size(info.get('filesize') or info.get('filesize_approx')),
-                    }
-                    if info.get('format_id'):
-                        pin_entry['format_id'] = info['format_id']
-                    links.append(pin_entry)
-                    seen_urls.add(main_url)
-
-        # Facebook-specific fallback: try direct SD/HD URLs from info dict.
-        # Include a format_id so the proxy can re-download via yt-dlp at
-        # click time (avoiding CDN URL expiration that causes proxy.txt).
         if not links and platform == 'facebook':
             for key in ('hd_url', 'sd_url'):
                 direct_url = info.get(key)
@@ -802,16 +855,11 @@ def extract_video_info(url):
                         'size': '',
                         'format_id': fmt_id,
                     })
-                    seen_urls.add(direct_url)
 
         if not links:
             return {'success': False, 'error': 'No downloadable video formats found.'}
 
-        # Limit to top 6 qualities to keep UI clean
         links = links[:6]
-
-        # Test each CDN URL concurrently and remove broken/expired ones.
-        # This prevents XML error pages from reaching the user's browser.
         links = _filter_working_links(links, platform)
 
         if not links:
@@ -823,6 +871,7 @@ def extract_video_info(url):
             'thumbnail': thumbnail,
             'links': links,
             'original_url': url,
+            'platform': platform,
         }
 
         if duration:
@@ -833,17 +882,19 @@ def extract_video_info(url):
         return result
 
     except yt_dlp.utils.DownloadError as e:
-        # If scraping already found links, use those despite yt-dlp failing
         if scraped_links:
             return {
                 'success': True, 'title': 'Video', 'thumbnail': '',
                 'links': scraped_links[:6], 'original_url': url,
+                'platform': platform,
             }
         error_msg = str(e)
-        # Platform-specific human-readable errors
         if 'IP address is blocked' in error_msg or 'IP is blocked' in error_msg:
             return {'success': False, 'error': 'TikTok has blocked access from this server. Try again later or use a different network.'}
         if 'cookies' in error_msg.lower() or 'login' in error_msg.lower() or 'empty media response' in error_msg.lower():
+            # YouTube bot-detection is a server-side issue, not a user cookie issue
+            if platform == 'youtube':
+                return {'success': False, 'error': 'YouTube is temporarily blocking this server. Please try again in a few seconds, or try a different video link.'}
             return {'success': False, 'error': (
                 'This platform requires authentication. '
                 'Export your browser cookies to cookies/' + (platform or 'platform') + '.txt '
@@ -854,7 +905,7 @@ def extract_video_info(url):
         if 'Private' in error_msg or 'private' in error_msg:
             return {'success': False, 'error': 'This video is private or unavailable.'}
         if platform == 'pinterest' and ('404' in error_msg or 'not found' in error_msg.lower()):
-            return {'success': False, 'error': 'Pinterest has blocked access from this server. Try opening the video in your browser and downloading it directly.'}
+            return {'success': False, 'error': 'Pinterest pin not found. Check that the link is correct and the pin is public.'}
         if '404' in error_msg or 'not found' in error_msg.lower():
             return {'success': False, 'error': 'Video not found. The post may be private, deleted, or region-restricted.'}
         return {'success': False, 'error': 'Could not extract video. The post may be private or the platform blocked access.'}
@@ -863,6 +914,7 @@ def extract_video_info(url):
             return {
                 'success': True, 'title': 'Video', 'thumbnail': '',
                 'links': scraped_links[:6], 'original_url': url,
+                'platform': platform,
             }
         return {'success': False, 'error': f'Download service error: {str(e)}'}
 
@@ -885,7 +937,6 @@ class handler(BaseHTTPRequestHandler):
             return
 
         url = data.get('url', '').strip()
-
         if not url:
             self._send_json(400, {'success': False, 'error': 'URL is required'})
             return
@@ -909,5 +960,4 @@ class handler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps(data).encode('utf-8'))
 
     def log_message(self, format, *args):
-        """Suppress default logging."""
         pass
