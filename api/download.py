@@ -120,13 +120,12 @@ _BROWSER_UA = (
 
 def _fetch_facebook_video(url):
     """
-    Extract Facebook video links via snapsave.io — the same backend used by
-    the metadownloader npm package in the reference repo.
+    Extract Facebook video links via fdown.net.
 
     Flow:
-      1. Open snapsave.io to get session cookies.
-      2. POST the Facebook URL to action.php.
-      3. Parse the returned HTML table for HD / SD download rows.
+      1. Seed session cookies from fdown.net homepage.
+      2. POST the Facebook URL to fdown.net/download.php.
+      3. Parse the returned HTML for HD / SD download anchors.
     Returns a list of link dicts [{url, quality, format, size}].
     """
     session = _requests.Session()
@@ -137,50 +136,55 @@ def _fetch_facebook_video(url):
 
     # Step 1 — seed cookies
     try:
-        session.get('https://snapsave.io/', headers=base_headers, timeout=10)
+        session.get('https://fdown.net/', headers=base_headers, timeout=10)
     except Exception:
         pass
 
-    # Step 2 — POST URL
+    # Step 2 — POST URL to fdown.net
     try:
         resp = session.post(
-            'https://snapsave.io/action.php',
-            data={'url': url},
+            'https://fdown.net/download.php',
+            data={'URLz': url},
             headers={
                 **base_headers,
                 'Content-Type': 'application/x-www-form-urlencoded',
-                'Referer': 'https://snapsave.io/',
-                'Origin': 'https://snapsave.io',
-                'X-Requested-With': 'XMLHttpRequest',
-                'Accept': '*/*',
+                'Referer': 'https://fdown.net/',
+                'Origin': 'https://fdown.net',
+                'Accept': 'text/html,application/xhtml+xml,*/*;q=0.8',
             },
             timeout=20,
+            allow_redirects=True,
         )
     except Exception:
         return []
 
-    # Step 3 — parse HTML response
+    if resp.status_code != 200:
+        return []
+
+    # Step 3 — parse anchors for SD / HD links
     soup = _BS(resp.text, 'html.parser')
     links = []
     seen = set()
 
-    for row in soup.select('tbody tr'):
-        a_el = row.select_one('a[href]')
-        if not a_el:
-            continue
-        href = a_el.get('href', '')
+    for a in soup.find_all('a', href=True):
+        href = a.get('href', '')
+        text = a.get_text(separator=' ').strip()
         if not href or href in seen:
             continue
-        seen.add(href)
-        row_text = row.get_text(separator=' ').upper()
-        quality = 'HD' if 'HD' in row_text else 'SD'
-        links.append({'url': href, 'quality': quality, 'format': 'mp4', 'size': ''})
+        # fdown.net labels: "Download Video in Normal Quality" (SD) and "Download Video in HD Quality" (HD)
+        text_upper = text.upper()
+        is_sd = 'NORMAL' in text_upper or ('DOWNLOAD' in text_upper and 'QUALITY' in text_upper and 'HD' not in text_upper)
+        is_hd = 'HD' in text_upper and 'DOWNLOAD' in text_upper
+        if (is_sd or is_hd) and ('fbcdn' in href or 'facebook' in href or href.startswith('https://')):
+            seen.add(href)
+            quality = 'HD' if is_hd else 'SD'
+            links.append({'url': href, 'quality': quality, 'format': 'mp4', 'size': ''})
 
-    # Fallback: any anchor with fbcdn in href
+    # Fallback: any fbcdn.net anchor on the page
     if not links:
         for a in soup.find_all('a', href=True):
-            href = a['href']
-            if ('fbcdn' in href or 'video' in href) and href not in seen:
+            href = a.get('href', '')
+            if 'fbcdn' in href and href not in seen:
                 seen.add(href)
                 quality = 'HD' if 'hd' in href.lower() else 'SD'
                 links.append({'url': href, 'quality': quality, 'format': 'mp4', 'size': ''})
@@ -223,6 +227,8 @@ def _fetch_pinterest_video(url):
         soup = _BS(resp.text, 'html.parser')
         links = []
 
+        _IMAGE_FMTS = {'jpg', 'jpeg', 'png', 'gif', 'webp', 'avif'}
+
         for row in soup.select('tbody tr'):
             tds = row.find_all('td')
             a_el = row.select_one('a[href]')
@@ -230,7 +236,8 @@ def _fetch_pinterest_video(url):
                 continue
 
             href = a_el.get('href', '')
-            # savepin.app wraps links as /download?url=<encoded_direct_url>
+            # savepin.app wraps links as force-save.php?url=<encoded_direct_url>
+            # or /download?url=<encoded_direct_url>
             parsed = urllib.parse.urlparse(href)
             qs = urllib.parse.parse_qs(parsed.query)
             direct_url = qs.get('url', [href])[0]
@@ -240,7 +247,11 @@ def _fetch_pinterest_video(url):
                        else (tds[0].text.strip() if tds else 'Unknown'))
             fmt = tds[1].text.strip().lower() if len(tds) > 1 else 'mp4'
 
-            if direct_url:
+            # Skip image-only entries (thumbnail rows) — only keep video formats
+            if fmt in _IMAGE_FMTS or quality.lower() in ('thumbnail', 'image'):
+                continue
+
+            if direct_url and direct_url.startswith('http'):
                 links.append({
                     'url': direct_url,
                     'quality': quality,
