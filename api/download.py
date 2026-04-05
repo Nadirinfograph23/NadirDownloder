@@ -459,49 +459,33 @@ def extract_video_info(url):
         base_ydl_opts['cookiefile'] = cf
 
     # ── Per-platform retry option sets ───────────────────────────────────────
-    # YouTube: use Android/iOS player clients — these bypass server IP blocks
-    # and don't require po_token (proof of origin) that the web client needs.
+    # YouTube: android_vr and web_safari don't require PO tokens and return
+    # full HD format lists (144p–2160p) from server IPs without authentication.
     _PLATFORM_RETRY_SETS = {
         'youtube': [
-            # Attempt 1: Android client — most reliable from server IPs
-            {
-                'http_headers': {'User-Agent': _UA_ANDROID},
-                'extractor_args': {
-                    'youtube': {
-                        'player_client': ['android'],
-                        'player_skip': ['configs', 'webpage'],
-                    }
-                },
-            },
-            # Attempt 2: iOS client
-            {
-                'http_headers': {'User-Agent': _UA_MOBILE},
-                'extractor_args': {
-                    'youtube': {
-                        'player_client': ['ios'],
-                        'player_skip': ['configs'],
-                    }
-                },
-            },
-            # Attempt 3: TV embedded client (no sign-in required)
+            # Attempt 1: android_vr + web_safari — current yt-dlp defaults, no PO token needed
             {
                 'http_headers': {'User-Agent': _UA_DESKTOP},
                 'extractor_args': {
                     'youtube': {
-                        'player_client': ['tv_embedded'],
+                        'player_client': ['android_vr', 'web_safari'],
+                        'player_skip': ['configs'],
                     }
                 },
+                'age_limit': 99,
             },
-            # Attempt 4: mweb client (mobile web — different API path)
+            # Attempt 2: android_vr only
             {
-                'http_headers': {'User-Agent': _UA_MOBILE},
+                'http_headers': {'User-Agent': _UA_ANDROID},
                 'extractor_args': {
                     'youtube': {
-                        'player_client': ['mweb'],
+                        'player_client': ['android_vr'],
+                        'player_skip': ['configs'],
                     }
                 },
+                'age_limit': 99,
             },
-            # Attempt 5: bare default with age bypass
+            # Attempt 3: bare default (yt-dlp picks best available clients)
             {
                 'http_headers': {'User-Agent': _UA_DESKTOP},
                 'age_limit': 99,
