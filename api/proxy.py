@@ -150,8 +150,9 @@ class handler(BaseHTTPRequestHandler):
             self._send_error(400, 'Unsupported platform')
             return
 
-        # TikTok: yt-dlp downloads the file to /tmp then streams it back.
-        if platform in YTDLP_PLATFORMS and format_id:
+        # TikTok: always use yt-dlp (CDN URLs expire and require fresh cookies).
+        # Pass format_id if provided, otherwise yt-dlp picks best quality.
+        if platform in YTDLP_PLATFORMS:
             self._handle_ytdlp_download(video_url, platform, format_id, filename, fmt)
             return
 
@@ -183,9 +184,21 @@ class handler(BaseHTTPRequestHandler):
             self._send_error(403, 'URL domain not allowed for this platform')
             return
 
-        # Always force video/mp4 as Content-Type regardless of what the CDN
-        # returns.  If the upstream sends text/plain (e.g. an error page),
-        # the browser would otherwise save the file as "proxy.txt".
+        # Detect XML / HTML error pages returned by CDNs (e.g. AWS S3
+        # AccessDenied, CloudFront errors).  Peek at the first 512 bytes
+        # before committing to streaming.
+        first_chunk = b''
+        for chunk in resp.iter_content(chunk_size=512):
+            first_chunk = chunk
+            break
+
+        if first_chunk:
+            peek = first_chunk.lstrip()
+            if peek.startswith(b'<?xml') or peek.startswith(b'<Error') or peek.startswith(b'<!DOCTYPE') or peek.startswith(b'<html'):
+                resp.close()
+                self._send_error(502, 'CDN returned an error page instead of a video. The link may have expired.')
+                return
+
         upstream_ct = resp.headers.get('Content-Type', 'video/mp4')
         content_type = 'video/mp4' if not upstream_ct.startswith('video/') else upstream_ct
         content_length = resp.headers.get('Content-Length', '')
@@ -202,8 +215,10 @@ class handler(BaseHTTPRequestHandler):
         self.send_header('Cache-Control', 'no-store')
         self.end_headers()
 
-        # Stream in 64 KB chunks
-        total = 0
+        # Write the already-read first chunk then stream the rest
+        if first_chunk:
+            self.wfile.write(first_chunk)
+        total = len(first_chunk)
         for chunk in resp.iter_content(chunk_size=65536):
             if not chunk:
                 continue
@@ -228,7 +243,7 @@ class handler(BaseHTTPRequestHandler):
                 'noplaylist': True,
                 'socket_timeout': 20,
                 'extractor_retries': 2,
-                'format': format_id,
+                'format': format_id or 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best',
                 'outtmpl': tmp_path,
                 'overwrites': True,
                 'http_headers': {
