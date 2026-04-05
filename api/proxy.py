@@ -21,7 +21,9 @@ MAX_PROXY_BYTES = 50 * 1024 * 1024  # 50 MB generous cap; Vercel will enforce it
 
 # Platforms that need yt-dlp to download (CDN URLs require cookies /
 # auth tokens that only yt-dlp can manage internally).
-YTDLP_PLATFORMS = {'tiktok'}
+# Facebook CDN URLs expire quickly and require session cookies; plain
+# urllib downloads fail and produce an error page saved as proxy.txt.
+YTDLP_PLATFORMS = {'tiktok', 'facebook'}
 
 # Platforms whose CDN URLs require server-side headers to download.
 # Only these platforms are proxied; others use direct links.
