@@ -426,18 +426,7 @@ function showResults(data, platform) {
         var downloadHref;
         // TikTok: yt-dlp downloads via original URL + format_id.
         var ytdlpPlatforms = ['tiktok'];
-        // Facebook: proxy re-extracts a fresh CDN URL at click time via
-        // yt-dlp (skip_download=True), then streams it — no URL expiry,
-        // no ffmpeg. Always send the original Facebook page URL.
-        if (platform === 'facebook' && data.original_url) {
-            var safeTitle = (data.title || 'video').replace(/[^\w\s\-]/g, '').trim().substring(0, 60) || 'video';
-            downloadHref = '/api/proxy'
-                + '?url=' + encodeURIComponent(data.original_url)
-                + '&platform=facebook'
-                + (link.format_id ? '&format_id=' + encodeURIComponent(link.format_id) : '')
-                + '&filename=' + encodeURIComponent(safeTitle)
-                + '&format=mp4';
-        } else if (ytdlpPlatforms.indexOf(platform) !== -1 && data.original_url && link.format_id) {
+        if (ytdlpPlatforms.indexOf(platform) !== -1 && data.original_url && link.format_id) {
             var safeTitle = (data.title || 'video').replace(/[^\w\s\-]/g, '').trim().substring(0, 60) || 'video';
             downloadHref = '/api/proxy'
                 + '?url=' + encodeURIComponent(data.original_url)
