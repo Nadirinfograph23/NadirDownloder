@@ -23,7 +23,7 @@ MAX_PROXY_BYTES = 200 * 1024 * 1024  # 200 MB cap
 # - twitter:  CDN URLs expire similarly fast
 # - youtube:  HD formats (720p+) are video-only; yt-dlp+ffmpeg merges video+audio
 # - pinterest: CDN links from savepin.app are unreliable; fresh yt-dlp is better
-YTDLP_PLATFORMS = {'tiktok', 'instagram', 'twitter', 'youtube'}
+YTDLP_PLATFORMS = {'tiktok', 'instagram', 'twitter', 'youtube', 'pinterest'}
 
 # Platforms whose CDN URLs require server-side headers to download.
 # Domain patterns are anchored so that e.g. "evil-tiktokcdn.com" won't match.
@@ -190,8 +190,16 @@ def _ydl_opts_for_platform(platform, format_id, tmp_path):
         base['age_limit'] = 99
 
     elif platform == 'pinterest':
-        base['format'] = format_id or 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best'
-        base['http_headers'] = {'User-Agent': _UA, 'Referer': 'https://www.pinterest.com/'}
+        # Pinterest serves HLS (m3u8) streams. Use hls_use_mpegts so ffmpeg
+        # converts the stream directly to mp4 without needing to download first.
+        base['format'] = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best[ext!=webm]/best'
+        base['http_headers'] = {
+            'User-Agent': _UA,
+            'Referer': 'https://www.pinterest.com/',
+            'Accept-Language': 'en-US,en;q=0.9',
+        }
+        base['hls_use_mpegts'] = True
+        base['concurrent_fragment_downloads'] = 4
 
     else:
         base['format'] = format_id or 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best'
