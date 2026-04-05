@@ -153,9 +153,15 @@ class handler(BaseHTTPRequestHandler):
             self._send_error(400, 'Unsupported platform')
             return
 
-        # yt-dlp path: TikTok & Pinterest CDN URLs need cookies / auth
-        # that only yt-dlp can handle, so we download via yt-dlp and
-        # stream the result back.
+        # Facebook: always re-extract a fresh CDN URL via yt-dlp at click
+        # time, then stream with requests (no tmp file, no ffmpeg needed).
+        # fbcdn.net URLs expire within seconds of extraction, so any URL
+        # obtained at page-load time is already stale when clicked.
+        if platform == 'facebook':
+            self._handle_facebook_download(video_url, format_id, filename, fmt)
+            return
+
+        # TikTok: yt-dlp downloads the file to /tmp then streams it back.
         if platform in YTDLP_PLATFORMS and format_id:
             self._handle_ytdlp_download(video_url, platform, format_id, filename, fmt)
             return
@@ -208,6 +214,96 @@ class handler(BaseHTTPRequestHandler):
         self.end_headers()
 
         # Stream in 64 KB chunks
+        total = 0
+        for chunk in resp.iter_content(chunk_size=65536):
+            if not chunk:
+                continue
+            total += len(chunk)
+            if total > MAX_PROXY_BYTES:
+                break
+            self.wfile.write(chunk)
+
+        resp.close()
+
+    def _handle_facebook_download(self, original_url, format_id, filename, fmt):
+        """
+        Radical Facebook fix: re-extract a fresh CDN URL via yt-dlp at the
+        moment of the download click (skip_download=True), then stream that
+        URL directly with requests.  No ffmpeg, no tmp file, no URL expiry.
+        """
+        _FB_UA = (
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+            'AppleWebKit/537.36 (KHTML, like Gecko) '
+            'Chrome/124.0.0.0 Safari/537.36'
+        )
+        ydl_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'skip_download': True,
+            'noplaylist': True,
+            'socket_timeout': 20,
+            'extractor_retries': 2,
+            'format': format_id if format_id else 'best[ext=mp4]/best',
+            'http_headers': {
+                'User-Agent': _FB_UA,
+                'Referer': 'https://www.facebook.com/',
+            },
+        }
+
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(original_url, download=False)
+        except Exception as e:
+            self._send_error(502, f'Could not extract Facebook video: {str(e)}')
+            return
+
+        if not info:
+            self._send_error(502, 'No video info extracted from Facebook')
+            return
+
+        # Prefer info['url'] (the selected-format direct URL), then fallbacks
+        fresh_url = info.get('url') or info.get('hd_url') or info.get('sd_url')
+        if not fresh_url:
+            for f in reversed(info.get('formats', [])):
+                if f.get('url') and f.get('vcodec', 'none') != 'none':
+                    fresh_url = f['url']
+                    break
+
+        if not fresh_url:
+            self._send_error(502, 'No direct Facebook video URL found')
+            return
+
+        # Stream the fresh CDN URL back to the client
+        try:
+            resp = _req.get(
+                fresh_url,
+                headers={
+                    'User-Agent': _FB_UA,
+                    'Referer': 'https://www.facebook.com/',
+                    'Accept': 'video/mp4,video/*;q=0.9,*/*;q=0.8',
+                },
+                timeout=30,
+                stream=True,
+                allow_redirects=True,
+            )
+            resp.raise_for_status()
+        except Exception as e:
+            self._send_error(502, f'Failed to fetch Facebook video: {str(e)}')
+            return
+
+        content_length = resp.headers.get('Content-Length', '')
+        safe_name = _sanitise_filename(filename)
+
+        self.send_response(200)
+        self.send_header('Content-Type', 'video/mp4')
+        if content_length:
+            self.send_header('Content-Length', content_length)
+        self.send_header('Content-Disposition',
+                         f'attachment; filename="{safe_name}.mp4"')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Cache-Control', 'no-store')
+        self.end_headers()
+
         total = 0
         for chunk in resp.iter_content(chunk_size=65536):
             if not chunk:
