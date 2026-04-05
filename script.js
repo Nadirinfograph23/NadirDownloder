@@ -427,7 +427,9 @@ function showResults(data, platform) {
         // TikTok CDN URLs require yt-dlp to download (cookies / auth
         // handled internally); pass the original page URL + format_id
         // so the proxy can use yt-dlp.
-        var ytdlpPlatforms = ['tiktok'];
+        // Facebook CDN URLs expire within seconds; use yt-dlp at click time
+        // (same as TikTok) so the proxy always fetches a fresh URL.
+        var ytdlpPlatforms = ['tiktok', 'facebook'];
         if (ytdlpPlatforms.indexOf(platform) !== -1 && data.original_url && link.format_id) {
             var safeTitle = (data.title || 'video').replace(/[^\w\s\-]/g, '').trim().substring(0, 60) || 'video';
             downloadHref = '/api/proxy'
