@@ -7,8 +7,10 @@ to extract video download links from social media platforms.
 from http.server import BaseHTTPRequestHandler
 import json
 import re
+import urllib.parse
 import yt_dlp
 import requests as _requests
+from bs4 import BeautifulSoup as _BS
 
 
 def detect_platform(url):
@@ -118,145 +120,134 @@ _BROWSER_UA = (
 
 def _fetch_facebook_video(url):
     """
-    Scrape a public Facebook video page to extract direct CDN download URLs.
-    Searches for playable_url, playable_url_quality_hd, sd_src, hd_src and
-    browser_native_*_url patterns embedded in the page HTML.
+    Extract Facebook video links via snapsave.io — the same backend used by
+    the metadownloader npm package in the reference repo.
+
+    Flow:
+      1. Open snapsave.io to get session cookies.
+      2. POST the Facebook URL to action.php.
+      3. Parse the returned HTML table for HD / SD download rows.
     Returns a list of link dicts [{url, quality, format, size}].
     """
-    headers = {
+    session = _requests.Session()
+    base_headers = {
         'User-Agent': _BROWSER_UA,
         'Accept-Language': 'en-US,en;q=0.9',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Referer': 'https://www.facebook.com/',
     }
 
-    def _clean(raw):
-        """Unescape Facebook JSON-encoded slashes and percent signs."""
-        return raw.replace('\\/', '/').replace('\\u0025', '%').replace('\\u002F', '/')
+    # Step 1 — seed cookies
+    try:
+        session.get('https://snapsave.io/', headers=base_headers, timeout=10)
+    except Exception:
+        pass
 
-    def _search_html(html):
-        hd_url, sd_url = None, None
+    # Step 2 — POST URL
+    try:
+        resp = session.post(
+            'https://snapsave.io/action.php',
+            data={'url': url},
+            headers={
+                **base_headers,
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Referer': 'https://snapsave.io/',
+                'Origin': 'https://snapsave.io',
+                'X-Requested-With': 'XMLHttpRequest',
+                'Accept': '*/*',
+            },
+            timeout=20,
+        )
+    except Exception:
+        return []
 
-        for pat in [
-            r'"playable_url_quality_hd":"([^"]+)"',
-            r'"browser_native_hd_url":"([^"]+)"',
-            r'hd_src:"([^"]+)"',
-            r'"hd_src":"([^"]+)"',
-        ]:
-            m = re.search(pat, html)
-            if m:
-                hd_url = _clean(m.group(1))
-                break
+    # Step 3 — parse HTML response
+    soup = _BS(resp.text, 'html.parser')
+    links = []
+    seen = set()
 
-        for pat in [
-            r'"playable_url":"([^"]+)"',
-            r'"browser_native_sd_url":"([^"]+)"',
-            r'sd_src:"([^"]+)"',
-            r'"sd_src":"([^"]+)"',
-        ]:
-            m = re.search(pat, html)
-            if m:
-                candidate = _clean(m.group(1))
-                if candidate != hd_url:
-                    sd_url = candidate
-                break
-
-        links = []
-        if hd_url:
-            links.append({'url': hd_url, 'quality': 'HD', 'format': 'mp4', 'size': ''})
-        if sd_url:
-            links.append({'url': sd_url, 'quality': 'SD', 'format': 'mp4', 'size': ''})
-        return links
-
-    # Try both www and mbasic (simpler HTML, less JS noise)
-    urls_to_try = [url]
-    if 'www.facebook.com' in url:
-        urls_to_try.append(url.replace('www.facebook.com', 'mbasic.facebook.com'))
-    elif 'facebook.com' in url and 'mbasic' not in url:
-        urls_to_try.append('https://mbasic.facebook.com/' + url.split('facebook.com/', 1)[-1])
-
-    for try_url in urls_to_try:
-        try:
-            resp = _requests.get(try_url, headers=headers, timeout=15, allow_redirects=True)
-            links = _search_html(resp.text)
-            if links:
-                return links
-        except Exception:
+    for row in soup.select('tbody tr'):
+        a_el = row.select_one('a[href]')
+        if not a_el:
             continue
-    return []
+        href = a_el.get('href', '')
+        if not href or href in seen:
+            continue
+        seen.add(href)
+        row_text = row.get_text(separator=' ').upper()
+        quality = 'HD' if 'HD' in row_text else 'SD'
+        links.append({'url': href, 'quality': quality, 'format': 'mp4', 'size': ''})
+
+    # Fallback: any anchor with fbcdn in href
+    if not links:
+        for a in soup.find_all('a', href=True):
+            href = a['href']
+            if ('fbcdn' in href or 'video' in href) and href not in seen:
+                seen.add(href)
+                quality = 'HD' if 'hd' in href.lower() else 'SD'
+                links.append({'url': href, 'quality': quality, 'format': 'mp4', 'size': ''})
+
+    return links[:4]
 
 
 def _fetch_pinterest_video(url):
     """
-    Download Pinterest video info by:
-    1. Following pin.it short-URL redirects to get the full pinterest.com/pin/ID URL.
-    2. Fetching the pin page and parsing the __PWS_DATA__ JSON blob embedded in the HTML.
-    3. Extracting the video_list dict which contains direct CDN MP4 URLs.
-    Returns a list of link dicts sorted by quality descending.
+    Extract Pinterest video links via savepin.app — the same service used by
+    the reference repo (milancodess/universalDownloader).
+
+    Sends the Pinterest / pin.it URL to savepin.app's download endpoint and
+    parses the returned HTML table for direct MP4 CDN links.
+    Returns a list of link dicts [{url, quality, format, size}].
     """
+    encoded_url = urllib.parse.quote(url, safe='')
+    api_url = (
+        f'https://www.savepin.app/download.php'
+        f'?url={encoded_url}&lang=en&type=redirect'
+    )
     headers = {
         'User-Agent': _BROWSER_UA,
+        'Accept': (
+            'text/html,application/xhtml+xml,application/xml;'
+            'q=0.9,image/avif,image/webp,*/*;q=0.8'
+        ),
         'Accept-Language': 'en-US,en;q=0.9',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Referer': 'https://www.savepin.app/',
+        'sec-ch-ua': '"Not)A;Brand";v="8", "Chromium";v="124"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-fetch-dest': 'document',
+        'sec-fetch-mode': 'navigate',
+        'sec-fetch-site': 'same-origin',
+        'upgrade-insecure-requests': '1',
     }
 
     try:
-        # Follow redirects (resolves pin.it short URLs)
-        resp = _requests.get(url, headers=headers, timeout=15, allow_redirects=True)
-        html = resp.text
-        final_url = resp.url
-
-        # Extract __PWS_DATA__ JSON blob
-        m = re.search(r'<script id="__PWS_DATA__"[^>]*>(.*?)</script>', html, re.DOTALL)
-        if not m:
-            # Older pattern
-            m = re.search(r'window\.__PWS_INITIAL_PROPS__\s*=\s*(\{.*?\});', html, re.DOTALL)
-        if not m:
-            return []
-
-        data = json.loads(m.group(1))
-
-        # Recursively search for video_list (handles any nesting depth)
-        def deep_find(obj, key):
-            if isinstance(obj, dict):
-                if key in obj:
-                    return obj[key]
-                for v in obj.values():
-                    r = deep_find(v, key)
-                    if r is not None:
-                        return r
-            elif isinstance(obj, list):
-                for item in obj:
-                    r = deep_find(item, key)
-                    if r is not None:
-                        return r
-            return None
-
-        video_list = deep_find(data, 'video_list')
-        if not video_list or not isinstance(video_list, dict):
-            return []
-
+        resp = _requests.get(api_url, headers=headers, timeout=20, allow_redirects=True)
+        soup = _BS(resp.text, 'html.parser')
         links = []
-        seen_urls = set()
-        for quality_key, meta in video_list.items():
-            video_url = meta.get('url') or meta.get('V_EXP6')
-            if not video_url or video_url in seen_urls:
-                continue
-            seen_urls.add(video_url)
-            height = meta.get('height') or meta.get('width') or 0
-            label = f'{height}p' if height else quality_key.replace('V_', '').lower()
-            links.append({
-                'url': video_url,
-                'quality': label,
-                'format': 'mp4',
-                'size': '',
-            })
 
-        # Sort best quality first
-        links.sort(
-            key=lambda x: int(x['quality'].replace('p', '')) if x['quality'].endswith('p') else 0,
-            reverse=True,
-        )
+        for row in soup.select('tbody tr'):
+            tds = row.find_all('td')
+            a_el = row.select_one('a[href]')
+            if not a_el:
+                continue
+
+            href = a_el.get('href', '')
+            # savepin.app wraps links as /download?url=<encoded_direct_url>
+            parsed = urllib.parse.urlparse(href)
+            qs = urllib.parse.parse_qs(parsed.query)
+            direct_url = qs.get('url', [href])[0]
+
+            quality_el = row.select_one('.video-quality')
+            quality = (quality_el.text.strip() if quality_el
+                       else (tds[0].text.strip() if tds else 'Unknown'))
+            fmt = tds[1].text.strip().lower() if len(tds) > 1 else 'mp4'
+
+            if direct_url:
+                links.append({
+                    'url': direct_url,
+                    'quality': quality,
+                    'format': fmt or 'mp4',
+                    'size': '',
+                })
+
         return links[:4]
 
     except Exception:
