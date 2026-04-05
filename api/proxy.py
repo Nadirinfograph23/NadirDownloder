@@ -183,7 +183,7 @@ def _ydl_opts_for_platform(platform, format_id, tmp_path):
         base['http_headers'] = {'User-Agent': _UA_ANDROID}
         base['extractor_args'] = {
             'youtube': {
-                'player_client': ['android', 'ios', 'tv_embedded', 'mweb', 'web'],
+                'player_client': ['android_vr', 'web_safari'],
                 'player_skip': ['configs'],
             }
         }
