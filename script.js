@@ -459,11 +459,13 @@ function _buildProxyUrl(link, platform, originalUrl, title) {
     var safeTitle = (title || 'video').replace(/[^\w\s\-]/g, '').trim().substring(0, 60) || 'video';
 
     // These platforms re-extract at download time via yt-dlp (original page URL).
-    // This guarantees fresh CDN URLs — Instagram and Twitter CDN links expire in minutes.
-    var ytdlpPlatforms = ['tiktok', 'instagram', 'twitter'];
+    // - tiktok/instagram/twitter: CDN URLs expire quickly
+    // - youtube: HD formats need ffmpeg merge (video-only + audio)
+    // - pinterest: savepin.app links are unreliable; fresh yt-dlp is better
+    var ytdlpPlatforms = ['tiktok', 'instagram', 'twitter', 'youtube', 'pinterest'];
 
-    // These platforms need server-side headers to download (proxy the CDN URL).
-    var needsProxy = ['facebook', 'pinterest'];
+    // These platforms need server-side headers to proxy the CDN URL directly.
+    var needsProxy = ['facebook'];
 
     if (ytdlpPlatforms.indexOf(platform) !== -1 && originalUrl) {
         return '/api/proxy'
