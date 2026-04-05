@@ -18,11 +18,12 @@ import requests as _req
 MAX_PROXY_BYTES = 200 * 1024 * 1024  # 200 MB cap
 
 # Platforms that ALWAYS use yt-dlp to re-extract and download at proxy time.
-# This guarantees fresh CDN URLs that haven't expired.
 # - tiktok:   CDN URLs require fresh cookies at download time
 # - instagram: CDN URLs expire within 1-5 minutes after extraction
 # - twitter:  CDN URLs expire similarly fast
-YTDLP_PLATFORMS = {'tiktok', 'instagram', 'twitter'}
+# - youtube:  HD formats (720p+) are video-only; yt-dlp+ffmpeg merges video+audio
+# - pinterest: CDN links from savepin.app are unreliable; fresh yt-dlp is better
+YTDLP_PLATFORMS = {'tiktok', 'instagram', 'twitter', 'youtube', 'pinterest'}
 
 # Platforms whose CDN URLs require server-side headers to download.
 # Domain patterns are anchored so that e.g. "evil-tiktokcdn.com" won't match.
@@ -110,6 +111,13 @@ PLATFORM_CONFIG = {
             ),
         },
     },
+    # YouTube and Pinterest are always handled by yt-dlp (in YTDLP_PLATFORMS),
+    # so domain_patterns and headers are unused — entries exist only to pass
+    # the PLATFORM_CONFIG membership check at the start of the handler.
+    'youtube': {
+        'domain_patterns': [r'(^|\.)googlevideo\.com$', r'(^|\.)youtube\.com$'],
+        'headers': {},
+    },
 }
 
 
@@ -133,6 +141,11 @@ def _sanitise_filename(name):
 
 def _ydl_opts_for_platform(platform, format_id, tmp_path):
     """Build yt-dlp options for a given platform download."""
+    _UA = (
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+        'AppleWebKit/537.36 (KHTML, like Gecko) '
+        'Chrome/120.0.0.0 Safari/537.36'
+    )
     base = {
         'quiet': True,
         'no_warnings': True,
@@ -142,46 +155,36 @@ def _ydl_opts_for_platform(platform, format_id, tmp_path):
         'extractor_retries': 3,
         'outtmpl': tmp_path,
         'overwrites': True,
+        # Ensure ffmpeg is used for merging video+audio streams
+        'prefer_ffmpeg': True,
+        'merge_output_format': 'mp4',
     }
 
     if platform == 'tiktok':
         base['format'] = format_id or 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best'
-        base['http_headers'] = {
-            'User-Agent': (
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                'AppleWebKit/537.36 (KHTML, like Gecko) '
-                'Chrome/120.0.0.0 Safari/537.36'
-            ),
-            'Referer': 'https://www.tiktok.com/',
-        }
+        base['http_headers'] = {'User-Agent': _UA, 'Referer': 'https://www.tiktok.com/'}
+
     elif platform == 'instagram':
         base['format'] = format_id or 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best'
-        base['http_headers'] = {
-            'User-Agent': (
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                'AppleWebKit/537.36 (KHTML, like Gecko) '
-                'Chrome/120.0.0.0 Safari/537.36'
-            ),
-        }
+        base['http_headers'] = {'User-Agent': _UA}
+
     elif platform == 'twitter':
         base['format'] = format_id or 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best'
-        base['http_headers'] = {
-            'User-Agent': (
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                'AppleWebKit/537.36 (KHTML, like Gecko) '
-                'Chrome/120.0.0.0 Safari/537.36'
-            ),
-        }
+        base['http_headers'] = {'User-Agent': _UA}
+
+    elif platform == 'youtube':
+        # format_id is a combined string like "399+140" built at extraction time.
+        # yt-dlp uses ffmpeg to merge the video and audio streams into one mp4.
+        base['format'] = format_id or 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best'
+        base['http_headers'] = {'User-Agent': _UA}
+
+    elif platform == 'pinterest':
+        base['format'] = format_id or 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best'
+        base['http_headers'] = {'User-Agent': _UA, 'Referer': 'https://www.pinterest.com/'}
+
     else:
         base['format'] = format_id or 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best'
-        base['http_headers'] = {
-            'User-Agent': (
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                'AppleWebKit/537.36 (KHTML, like Gecko) '
-                'Chrome/120.0.0.0 Safari/537.36'
-            ),
-            'Referer': f'https://www.{platform}.com/',
-        }
+        base['http_headers'] = {'User-Agent': _UA, 'Referer': f'https://www.{platform}.com/'}
 
     return base
 
