@@ -176,15 +176,16 @@ def _ydl_opts_for_platform(platform, format_id, tmp_path):
         base['http_headers'] = {'User-Agent': _UA}
 
     elif platform == 'youtube':
-        # Use Android player client to bypass server IP blocks.
-        # format_id is a combined string like "399+140" built at extraction time.
+        # tv_embedded: most reliable client for server-side downloads.
+        # No PO token needed, bypasses bot-detection, gives direct CDN URLs.
+        # Falls back to ios, then android_vr automatically via format selection.
         _UA_ANDROID = 'com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip'
         base['format'] = format_id or 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best'
-        base['http_headers'] = {'User-Agent': _UA_ANDROID}
+        base['http_headers'] = {'User-Agent': _UA}
         base['extractor_args'] = {
             'youtube': {
-                'player_client': ['android_vr', 'web_safari'],
-                'player_skip': ['configs'],
+                'player_client': ['tv_embedded', 'ios', 'android_vr'],
+                'player_skip': ['configs', 'webpage'],
             }
         }
         base['age_limit'] = 99
