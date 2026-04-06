@@ -11,6 +11,10 @@
     {
       "source": "/api/thumbnail",
       "destination": "/api/thumbnail"
+    },
+    {
+      "source": "/api/ig-download",
+      "destination": "/api/ig_download"
     }
   ],
   "functions": {
@@ -25,6 +29,10 @@
     "api/thumbnail.py": {
       "runtime": "@vercel/python@4.5.0",
       "maxDuration": 10
+    },
+    "api/ig_download.py": {
+      "runtime": "@vercel/python@4.5.0",
+      "maxDuration": 60
     }
   }
 }

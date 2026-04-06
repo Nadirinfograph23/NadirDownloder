@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'api'))
 from download import extract_video_info, detect_platform
 import proxy as _proxy_module
 import thumbnail as _thumb_module
+import ig_download as _ig_dl_module
 import requests as _requests
 import yt_dlp
 
@@ -330,6 +331,36 @@ def api_thumbnail():
 
     except Exception as e:
         return _json_error(502, f'Failed to proxy thumbnail: {e}')
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# /api/ig-download  — dedicated Instagram download (extract + stream fresh CDN)
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route('/api/ig-download', methods=['GET', 'OPTIONS'])
+def api_ig_download():
+    if request.method == 'OPTIONS':
+        return _cors_ok()
+
+    ig_url = (request.args.get('url') or '').strip()
+
+    if not ig_url or not ig_url.startswith('http'):
+        return _json_error(400, 'Missing or invalid url parameter')
+
+    import re as _re
+    if not _re.search(r'instagram\.com|instagr\.am', ig_url, _re.I):
+        return _json_error(400, 'URL is not an Instagram link')
+
+    status, headers_dict, body = _ig_dl_module.stream_instagram(ig_url)
+
+    if isinstance(body, (bytes, bytearray)):
+        resp = Response(body, status=status)
+    else:
+        resp = Response(stream_with_context(body), status=status)
+
+    for k, v in headers_dict.items():
+        resp.headers[k] = v
+
+    return resp
 
 
 # ─────────────────────────────────────────────────────────────────────────────

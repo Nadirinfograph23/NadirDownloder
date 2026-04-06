@@ -480,11 +480,18 @@ function showResults(data, platform) {
 function _buildProxyUrl(link, platform, originalUrl, title) {
     var safeTitle = (title || 'video').replace(/[^\w\s\-]/g, '').trim().substring(0, 60) || 'video';
 
+    // Instagram: use dedicated /api/ig-download endpoint — fresh extraction +
+    // streaming with Content-Disposition: attachment on every request.
+    if (platform === 'instagram' && originalUrl) {
+        return '/api/ig-download'
+            + '?url=' + encodeURIComponent(originalUrl);
+    }
+
     // These platforms re-extract at download time via yt-dlp (original page URL).
-    // - tiktok/instagram/twitter: CDN URLs expire quickly
+    // - tiktok/twitter: CDN URLs expire quickly
     // - youtube: HD formats need ffmpeg merge (video-only + audio)
     // - pinterest: CDN pinimg.com URLs return 403; must re-extract with yt-dlp
-    var ytdlpPlatforms = ['tiktok', 'instagram', 'twitter', 'youtube', 'pinterest'];
+    var ytdlpPlatforms = ['tiktok', 'twitter', 'youtube', 'pinterest'];
 
     // These platforms stream the CDN URL server-side with proper headers.
     // - facebook: fbcdn.net needs Referer header
@@ -585,8 +592,12 @@ function handleLinkClick(index) {
     if (iconEl) iconEl.className = 'fas fa-spinner fa-spin';
     if (btn) btn.style.opacity = '0.8';
 
-    // For yt-dlp platforms use fetch() to detect errors; for direct links trigger immediately
-    var isProxyDownload = (downloadUrl.indexOf('/api/proxy') !== -1);
+    // For server-side streaming endpoints use fetch() to detect errors before they
+    // reach the user as a corrupted file; for direct CDN links trigger immediately.
+    var isProxyDownload = (
+        downloadUrl.indexOf('/api/proxy') !== -1 ||
+        downloadUrl.indexOf('/api/ig-download') !== -1
+    );
     if (isProxyDownload) {
         showToast(t('toast_downloading') || 'جاري التحميل...', 'fas fa-spinner fa-spin');
         _fetchAndDownload(downloadUrl, d.title, link.format || 'mp4', iconEl, btn);
