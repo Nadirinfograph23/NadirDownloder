@@ -1,15 +1,16 @@
 """
-YouTube download service — yt-dlp based, multi-client retry chain.
+YouTube download service — yt-dlp with URL validation.
 
-Key fixes:
-- Uses mweb client first: no PO token needed, works on server IPs
-- Skips HEAD-check validation on YouTube (googlevideo URLs fail HEAD requests
-  without proper signed query params — they are valid but look broken)
-- Proper merged format_id strings for video+audio HD qualities
-- Handles nsig signature errors by falling back to alternate clients
+- Multi-client retry chain: mweb -> tv_embedded -> ios/android_vr -> android_vr
+- Each extracted URL is validated (HEAD request: status=200, Content-Length>0)
+- Broken / expired / 403 URLs are removed before returning
+- Extraction retried up to 3 times across client chain if no valid links found
 """
 
+import time
+import requests as _requests
 import yt_dlp
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 _UA_DESKTOP = (
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
@@ -23,21 +24,12 @@ _UA_MOBILE = (
 )
 _UA_ANDROID = 'com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip'
 
-# Ordered list of yt-dlp option sets to try for YouTube.
-# mweb is first — it requires no PO token and is least affected by bot-detection
-# on server-side IPs. tv_embedded is second. ios/android_vr third.
-_YT_RETRY_SETS = [
-    # 1. mweb — best for server-IPs, no PO token, direct CDN URLs
+_YT_CLIENT_SETS = [
     {
         'http_headers': {'User-Agent': _UA_MOBILE},
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['mweb'],
-            }
-        },
+        'extractor_args': {'youtube': {'player_client': ['mweb']}},
         'age_limit': 99,
     },
-    # 2. tv_embedded — bypasses bot-detection, skips most webpage checks
     {
         'http_headers': {'User-Agent': _UA_DESKTOP},
         'extractor_args': {
@@ -48,7 +40,6 @@ _YT_RETRY_SETS = [
         },
         'age_limit': 99,
     },
-    # 3. ios + android_vr — direct CDN URLs, no signature needed
     {
         'http_headers': {'User-Agent': _UA_MOBILE},
         'extractor_args': {
@@ -59,83 +50,78 @@ _YT_RETRY_SETS = [
         },
         'age_limit': 99,
     },
-    # 4. android_vr alone — final fallback
     {
         'http_headers': {'User-Agent': _UA_ANDROID},
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android_vr'],
-            }
-        },
+        'extractor_args': {'youtube': {'player_client': ['android_vr']}},
         'age_limit': 99,
     },
 ]
+
+_MAX_EXTRACT_RETRIES = 3
 
 
 def _format_size(filesize):
     if not filesize:
         return ''
-    size_mb = filesize / (1024 * 1024)
-    if size_mb >= 1:
-        return f"{size_mb:.1f} MB"
-    return f"{filesize / 1024:.0f} KB"
+    mb = filesize / (1024 * 1024)
+    return f"{mb:.1f} MB" if mb >= 1 else f"{filesize / 1024:.0f} KB"
 
 
-def extract_youtube(url, cookie_file=None):
+def _validate_url(url, timeout=8):
     """
-    Extract YouTube video info. Returns dict with success/links/title/thumbnail.
-    Tries multiple yt-dlp client strategies in order.
+    Return True if the URL is reachable and has content.
+    Uses HEAD first; falls back to GET with stream=True if HEAD returns
+    a non-standard status (some CDNs return 403 on HEAD but 200 on GET).
     """
-    base_opts = {
-        'quiet': True,
-        'no_warnings': True,
-        'skip_download': True,
-        'noplaylist': True,
-        'socket_timeout': 30,
-        'extractor_retries': 3,
-    }
-    if cookie_file:
-        base_opts['cookiefile'] = cookie_file
+    headers = {'User-Agent': _UA_DESKTOP}
+    try:
+        r = _requests.head(url, headers=headers, timeout=timeout, allow_redirects=True)
+        if r.status_code == 200:
+            cl = int(r.headers.get('Content-Length', 0) or 0)
+            return cl > 0
+        if r.status_code in (403, 405, 501):
+            # Try GET with stream to avoid downloading the body
+            r2 = _requests.get(url, headers=headers, timeout=timeout,
+                               stream=True, allow_redirects=True)
+            if r2.status_code == 200:
+                cl = int(r2.headers.get('Content-Length', 0) or 0)
+                r2.close()
+                return cl > 0
+            r2.close()
+    except Exception:
+        pass
+    return False
 
-    info = None
-    last_exc = None
 
-    for retry_set in _YT_RETRY_SETS:
-        opts = {**base_opts, **retry_set}
-        try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                if info:
-                    break
-        except yt_dlp.utils.DownloadError as e:
-            last_exc = e
-            msg = str(e).lower()
-            # If the video is genuinely unavailable/private, stop retrying
-            if 'private video' in msg or 'video unavailable' in msg:
-                break
-            continue
-        except Exception as e:
-            last_exc = e
-            continue
+def _validate_links_parallel(links, max_workers=6):
+    """Validate a list of link dicts in parallel; return only valid ones."""
+    if not links:
+        return []
 
-    if not info:
-        err = str(last_exc) if last_exc else 'Could not extract YouTube video.'
-        if 'sign in' in err.lower() or 'bot' in err.lower() or 'login' in err.lower():
-            return {
-                'success': False,
-                'error': 'YouTube is temporarily blocking this server. Please try again in a few seconds.',
-            }
-        if 'private' in err.lower() or 'unavailable' in err.lower():
-            return {'success': False, 'error': 'This video is private or unavailable.'}
-        return {'success': False, 'error': 'Could not extract YouTube video. Please try again.'}
+    results = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = {ex.submit(_validate_url, lnk['url']): i for i, lnk in enumerate(links)}
+        for future in as_completed(futures):
+            idx = futures[future]
+            try:
+                results[idx] = future.result()
+            except Exception:
+                results[idx] = False
 
-    title = info.get('title', 'YouTube Video')
-    thumbnail = info.get('thumbnail', '')
-    duration = info.get('duration')
+    return [links[i] for i in sorted(results) if results[i]]
+
+
+def _extract_info_once(url, base_opts, client_set):
+    opts = {**base_opts, **client_set}
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        return ydl.extract_info(url, download=False)
+
+
+def _build_links(info):
+    """Parse yt-dlp info dict into a list of candidate link dicts."""
     formats = info.get('formats', [])
-
-    muxed = []      # formats with both video + audio
-    video_only = [] # video-only formats (for HD merging)
+    muxed = []
+    video_only = []
     seen_urls = set()
 
     for f in formats:
@@ -143,7 +129,6 @@ def extract_youtube(url, cookie_file=None):
         if not f_url or f_url in seen_urls:
             continue
         protocol = f.get('protocol', '')
-        # Skip HLS/DASH manifests — we want direct CDN URLs
         if protocol in ('m3u8', 'm3u8_native', 'http_dash_segments', 'dash'):
             continue
 
@@ -152,14 +137,12 @@ def extract_youtube(url, cookie_file=None):
         has_video = vcodec not in ('none', None)
         has_audio = acodec not in ('none', None)
         height = f.get('height')
-        ext = f.get('ext', 'mp4')
-
         seen_urls.add(f_url)
 
         entry = {
             'url': f_url,
             'height': height,
-            'ext': ext,
+            'ext': f.get('ext', 'mp4'),
             'filesize': f.get('filesize') or f.get('filesize_approx'),
             'has_audio': has_audio,
             'has_video': has_video,
@@ -174,7 +157,6 @@ def extract_youtube(url, cookie_file=None):
         elif has_video and not has_audio:
             video_only.append(entry)
 
-    # Build links from muxed formats (sorted best-first)
     muxed.sort(key=lambda x: (x['height'] or 0, x['tbr']), reverse=True)
     links = []
     seen_heights = set()
@@ -188,32 +170,32 @@ def extract_youtube(url, cookie_file=None):
         entry = {
             'url': vf['url'],
             'quality': label,
-            'format': 'mp4' if vf['ext'] in ('mp4', 'webm', 'mkv') else 'mp4',
+            'format': 'mp4',
             'size': _format_size(vf['filesize']),
         }
         if vf.get('format_id'):
             entry['format_id'] = vf['format_id']
         links.append(entry)
 
-    # Add HD video-only formats merged with best audio (for 1080p / 4K)
+    # HD video-only + best audio (for 1080p / 4K)
     if video_only:
         best_audio = None
         for f in formats:
-            is_audio_only = (
+            is_audio = (
                 f.get('acodec', 'none') not in ('none', None) and
                 f.get('vcodec', 'none') in ('none', None)
             )
-            if is_audio_only and f.get('ext', '') in ('m4a', 'mp4', 'webm'):
+            if is_audio and f.get('ext', '') in ('m4a', 'mp4', 'webm'):
                 if best_audio is None or (f.get('abr') or 0) > (best_audio.get('abr') or 0):
                     best_audio = f
 
         if best_audio:
             audio_id = best_audio.get('format_id', '')
-            audio_size = (best_audio.get('filesize') or best_audio.get('filesize_approx') or 0)
-
-            yt_mp4 = [f for f in video_only if f.get('ext') == 'mp4']
-            yt_mp4.sort(key=lambda x: x['height'] or 0, reverse=True)
-
+            audio_size = best_audio.get('filesize') or best_audio.get('filesize_approx') or 0
+            yt_mp4 = sorted(
+                [f for f in video_only if f.get('ext') == 'mp4'],
+                key=lambda x: x['height'] or 0, reverse=True
+            )
             for vf in yt_mp4:
                 h = vf['height']
                 if not h or h in seen_heights:
@@ -230,7 +212,6 @@ def extract_youtube(url, cookie_file=None):
                     'format_id': merged_id,
                 })
 
-    # Final fallback: use yt-dlp's best single URL
     if not links and info.get('url'):
         h = info.get('height')
         links.append({
@@ -240,23 +221,90 @@ def extract_youtube(url, cookie_file=None):
             'size': _format_size(info.get('filesize') or info.get('filesize_approx')),
         })
 
-    if not links:
-        return {'success': False, 'error': 'No downloadable formats found for this YouTube video.'}
-
-    # Sort best quality first
     links.sort(
         key=lambda x: int(x['quality'].replace('p', '')) if x['quality'].endswith('p') else 0,
         reverse=True,
     )
-    links = links[:6]
+    return links[:6]
 
-    result = {
-        'success': True,
-        'title': title,
-        'thumbnail': thumbnail,
-        'links': links,
-        'platform': 'youtube',
+
+def extract_youtube(url, cookie_file=None):
+    """
+    Extract YouTube video. Returns only validated (status=200, Content-Length>0) links.
+    Retries extraction up to _MAX_EXTRACT_RETRIES times across client chain.
+    """
+    base_opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'skip_download': True,
+        'noplaylist': True,
+        'socket_timeout': 30,
+        'extractor_retries': 3,
     }
-    if duration:
-        result['duration'] = f"{int(duration // 60)}:{int(duration % 60):02d}"
-    return result
+    if cookie_file:
+        base_opts['cookiefile'] = cookie_file
+
+    last_exc = None
+
+    for attempt in range(1, _MAX_EXTRACT_RETRIES + 1):
+        info = None
+
+        for client_set in _YT_CLIENT_SETS:
+            try:
+                info = _extract_info_once(url, base_opts, client_set)
+                if info:
+                    break
+            except yt_dlp.utils.DownloadError as e:
+                last_exc = e
+                msg = str(e).lower()
+                if 'private video' in msg or 'video unavailable' in msg:
+                    return {'success': False, 'error': 'This video is private or unavailable.'}
+                continue
+            except Exception as e:
+                last_exc = e
+                continue
+
+        if not info:
+            if attempt < _MAX_EXTRACT_RETRIES:
+                time.sleep(1)
+            continue
+
+        # Build candidate links
+        candidates = _build_links(info)
+
+        if not candidates:
+            if attempt < _MAX_EXTRACT_RETRIES:
+                time.sleep(1)
+            continue
+
+        # Validate each URL — remove broken / 403 / expired ones
+        valid_links = _validate_links_parallel(candidates)
+
+        if valid_links:
+            result = {
+                'success': True,
+                'title': info.get('title', 'YouTube Video'),
+                'thumbnail': info.get('thumbnail', ''),
+                'links': valid_links,
+                'platform': 'youtube',
+            }
+            dur = info.get('duration')
+            if dur:
+                result['duration'] = f"{int(dur // 60)}:{int(dur % 60):02d}"
+            return result
+
+        # All links failed validation — retry extraction
+        if attempt < _MAX_EXTRACT_RETRIES:
+            time.sleep(1)
+
+    # All attempts exhausted
+    err = str(last_exc) if last_exc else ''
+    if 'sign in' in err.lower() or 'bot' in err.lower() or 'login' in err.lower():
+        return {
+            'success': False,
+            'error': 'YouTube is temporarily blocking this server. Please try again in a few seconds.',
+        }
+    if 'private' in err.lower() or 'unavailable' in err.lower():
+        return {'success': False, 'error': 'This video is private or unavailable.'}
+
+    return {'success': False, 'error': 'No valid download links found. Please try again.'}
