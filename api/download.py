@@ -7,10 +7,9 @@ Radical resilience strategy
 ────────────────────────────
 1. Cookie files  — place Netscape-format cookies in  cookies/<platform>.txt
                    (instagram.txt, tiktok.txt, twitter.txt, youtube.txt, facebook.txt)
-2. Multi-option yt-dlp retry chain — each platform is tried with progressively
-   different yt-dlp option sets so that temporary extractor quirks are bypassed.
-3. Platform-specific alternative extraction paths run BEFORE yt-dlp.
-4. yt-dlp is auto-updated on server startup so extractors stay current.
+2. Per-platform service modules for YouTube, Instagram, Pinterest with
+   multi-strategy retry chains (see api/services/).
+3. yt-dlp is auto-updated on server startup so extractors stay current.
 """
 
 from http.server import BaseHTTPRequestHandler
@@ -18,10 +17,17 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
 import re
+import sys
 import urllib.parse
 import yt_dlp
 import requests as _requests
 from bs4 import BeautifulSoup as _BS
+
+# Import dedicated service modules
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from services.youtube import extract_youtube
+from services.instagram import extract_instagram
+from services.pinterest import extract_pinterest
 
 # ── Cookie-file support ───────────────────────────────────────────────────────
 _COOKIE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'cookies')
@@ -569,17 +575,22 @@ def _fetch_facebook_video(url):
 def extract_video_info(url):
     platform = detect_platform(url)
 
+    # ── Route to dedicated service modules for YouTube / Instagram / Pinterest ──
+    cf = _cookie_file(platform) if platform else None
+
+    if platform == 'youtube':
+        return extract_youtube(url, cookie_file=cf)
+
+    if platform == 'instagram':
+        return extract_instagram(url, cookie_file=cf)
+
     if platform == 'pinterest':
-        url = _resolve_pinterest_url(url)
+        return extract_pinterest(url, cookie_file=cf)
+    # ─────────────────────────────────────────────────────────────────────────
 
     scraped_links = []
     if platform == 'facebook':
         scraped_links = _fetch_facebook_video(url)
-    elif platform == 'pinterest':
-        scraped_links = _fetch_pinterest_video(url)
-    elif platform == 'instagram':
-        # Try embed-page scraping first (no cookies needed for public posts)
-        scraped_links = _fetch_instagram_video(url)
 
     _UA_DESKTOP = (
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
