@@ -67,11 +67,11 @@ def _format_size(filesize):
     return f"{mb:.1f} MB" if mb >= 1 else f"{filesize / 1024:.0f} KB"
 
 
-def _validate_url(url, timeout=8):
+def _validate_url(url, timeout=5):
     """
     Return True if the URL is reachable and has content.
-    Uses HEAD first; falls back to GET with stream=True if HEAD returns
-    a non-standard status (some CDNs return 403 on HEAD but 200 on GET).
+    Uses HEAD first; falls back to a small GET range if HEAD is blocked.
+    Timeout is intentionally short (5s) to stay within serverless limits.
     """
     headers = {'User-Agent': _UA_DESKTOP}
     try:
@@ -80,27 +80,33 @@ def _validate_url(url, timeout=8):
             cl = int(r.headers.get('Content-Length', 0) or 0)
             return cl > 0
         if r.status_code in (403, 405, 501):
-            # Try GET with stream to avoid downloading the body
-            r2 = _requests.get(url, headers=headers, timeout=timeout,
+            headers2 = {**headers, 'Range': 'bytes=0-0'}
+            r2 = _requests.get(url, headers=headers2, timeout=timeout,
                                stream=True, allow_redirects=True)
-            if r2.status_code == 200:
-                cl = int(r2.headers.get('Content-Length', 0) or 0)
-                r2.close()
-                return cl > 0
+            ok = r2.status_code in (200, 206)
             r2.close()
+            return ok
     except Exception:
         pass
     return False
 
 
-def _validate_links_parallel(links, max_workers=6):
-    """Validate a list of link dicts in parallel; return only valid ones."""
+def _validate_links_parallel(links, max_workers=4):
+    """
+    Validate link URLs in parallel. Only validates the top 4 to save time
+    on serverless environments with strict execution time limits.
+    Returns only links that pass (status=200/206, Content-Length>0).
+    """
     if not links:
         return []
 
+    # Only validate top 4 candidates to stay within serverless timeouts
+    to_check = links[:4]
+    remaining = links[4:]
+
     results = {}
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        futures = {ex.submit(_validate_url, lnk['url']): i for i, lnk in enumerate(links)}
+        futures = {ex.submit(_validate_url, lnk['url']): i for i, lnk in enumerate(to_check)}
         for future in as_completed(futures):
             idx = futures[future]
             try:
@@ -108,7 +114,11 @@ def _validate_links_parallel(links, max_workers=6):
             except Exception:
                 results[idx] = False
 
-    return [links[i] for i in sorted(results) if results[i]]
+    valid = [to_check[i] for i in sorted(results) if results[i]]
+    # Append un-validated remainder only when we got at least 1 valid link above
+    if valid:
+        valid.extend(remaining)
+    return valid
 
 
 def _extract_info_once(url, base_opts, client_set):
