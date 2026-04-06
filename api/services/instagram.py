@@ -47,17 +47,18 @@ def _get_shortcode(url):
 
 # ── URL validation ────────────────────────────────────────────────────────────
 
-def _validate_url(url, timeout=8):
-    """Return True if URL returns HTTP 200 with non-zero Content-Length."""
+def _validate_url(url, timeout=5):
+    """Return True if URL returns HTTP 200/206 with content (short timeout for serverless)."""
     headers = {'User-Agent': _UA_DESKTOP}
     try:
         r = _requests.head(url, headers=headers, timeout=timeout, allow_redirects=True)
         if r.status_code == 200:
             return int(r.headers.get('Content-Length', 0) or 0) > 0
         if r.status_code in (403, 405, 501):
-            r2 = _requests.get(url, headers=headers, timeout=timeout,
+            headers2 = {**headers, 'Range': 'bytes=0-0'}
+            r2 = _requests.get(url, headers=headers2, timeout=timeout,
                                stream=True, allow_redirects=True)
-            ok = r2.status_code == 200 and int(r2.headers.get('Content-Length', 0) or 0) > 0
+            ok = r2.status_code in (200, 206)
             r2.close()
             return ok
     except Exception:
