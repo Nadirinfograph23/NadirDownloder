@@ -2,3 +2,10 @@ yt-dlp
 flask
 requests
 beautifulsoup4
+beautifulsoup4
+django-proxy
+download
+flask
+requests
+sorl-thumbnail-async
+yt-dlp
