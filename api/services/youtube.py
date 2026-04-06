@@ -1,16 +1,18 @@
 """
-YouTube download service — yt-dlp with URL validation.
+YouTube download service — yt-dlp, single best link, no broken CDN URLs.
 
-- Multi-client retry chain: mweb -> tv_embedded -> ios/android_vr -> android_vr
-- Each extracted URL is validated (HEAD request: status=200, Content-Length>0)
-- Broken / expired / 403 URLs are removed before returning
-- Extraction retried up to 3 times across client chain if no valid links found
+Strategy:
+- Use yt-dlp to extract video info (title, thumbnail, duration).
+- Return the ORIGINAL YouTube URL as the download target.
+- The proxy re-extracts a fresh CDN URL at download time (same server IP).
+- This avoids the cross-IP CDN URL expiry problem on Vercel serverless.
+
+Format used: best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best
+Retry: up to 3 times across multiple yt-dlp player clients.
 """
 
 import time
-import requests as _requests
 import yt_dlp
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 _UA_DESKTOP = (
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
@@ -24,12 +26,9 @@ _UA_MOBILE = (
 )
 _UA_ANDROID = 'com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip'
 
+_FORMAT = 'best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best'
+
 _YT_CLIENT_SETS = [
-    {
-        'http_headers': {'User-Agent': _UA_MOBILE},
-        'extractor_args': {'youtube': {'player_client': ['mweb']}},
-        'age_limit': 99,
-    },
     {
         'http_headers': {'User-Agent': _UA_DESKTOP},
         'extractor_args': {
@@ -55,193 +54,26 @@ _YT_CLIENT_SETS = [
         'extractor_args': {'youtube': {'player_client': ['android_vr']}},
         'age_limit': 99,
     },
+    {
+        'http_headers': {'User-Agent': _UA_DESKTOP},
+        'age_limit': 99,
+    },
 ]
 
-_MAX_EXTRACT_RETRIES = 3
+_MAX_RETRIES = 3
 
 
-def _format_size(filesize):
-    if not filesize:
+def _format_duration(seconds):
+    if not seconds:
         return ''
-    mb = filesize / (1024 * 1024)
-    return f"{mb:.1f} MB" if mb >= 1 else f"{filesize / 1024:.0f} KB"
-
-
-def _validate_url(url, timeout=5):
-    """
-    Return True if the URL is reachable and has content.
-    Uses HEAD first; falls back to a small GET range if HEAD is blocked.
-    Timeout is intentionally short (5s) to stay within serverless limits.
-    """
-    headers = {'User-Agent': _UA_DESKTOP}
-    try:
-        r = _requests.head(url, headers=headers, timeout=timeout, allow_redirects=True)
-        if r.status_code == 200:
-            cl = int(r.headers.get('Content-Length', 0) or 0)
-            return cl > 0
-        if r.status_code in (403, 405, 501):
-            headers2 = {**headers, 'Range': 'bytes=0-0'}
-            r2 = _requests.get(url, headers=headers2, timeout=timeout,
-                               stream=True, allow_redirects=True)
-            ok = r2.status_code in (200, 206)
-            r2.close()
-            return ok
-    except Exception:
-        pass
-    return False
-
-
-def _validate_links_parallel(links, max_workers=4):
-    """
-    Validate link URLs in parallel. Only validates the top 4 to save time
-    on serverless environments with strict execution time limits.
-    Returns only links that pass (status=200/206, Content-Length>0).
-    """
-    if not links:
-        return []
-
-    # Only validate top 4 candidates to stay within serverless timeouts
-    to_check = links[:4]
-    remaining = links[4:]
-
-    results = {}
-    with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        futures = {ex.submit(_validate_url, lnk['url']): i for i, lnk in enumerate(to_check)}
-        for future in as_completed(futures):
-            idx = futures[future]
-            try:
-                results[idx] = future.result()
-            except Exception:
-                results[idx] = False
-
-    valid = [to_check[i] for i in sorted(results) if results[i]]
-    # Append un-validated remainder only when we got at least 1 valid link above
-    if valid:
-        valid.extend(remaining)
-    return valid
-
-
-def _extract_info_once(url, base_opts, client_set):
-    opts = {**base_opts, **client_set}
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        return ydl.extract_info(url, download=False)
-
-
-def _build_links(info):
-    """Parse yt-dlp info dict into a list of candidate link dicts."""
-    formats = info.get('formats', [])
-    muxed = []
-    video_only = []
-    seen_urls = set()
-
-    for f in formats:
-        f_url = f.get('url')
-        if not f_url or f_url in seen_urls:
-            continue
-        protocol = f.get('protocol', '')
-        if protocol in ('m3u8', 'm3u8_native', 'http_dash_segments', 'dash'):
-            continue
-
-        vcodec = f.get('vcodec', 'none')
-        acodec = f.get('acodec', 'none')
-        has_video = vcodec not in ('none', None)
-        has_audio = acodec not in ('none', None)
-        height = f.get('height')
-        seen_urls.add(f_url)
-
-        entry = {
-            'url': f_url,
-            'height': height,
-            'ext': f.get('ext', 'mp4'),
-            'filesize': f.get('filesize') or f.get('filesize_approx'),
-            'has_audio': has_audio,
-            'has_video': has_video,
-            'tbr': f.get('tbr') or 0,
-            'format_id': f.get('format_id', ''),
-            'format_note': f.get('format_note', ''),
-            'abr': f.get('abr') or 0,
-        }
-
-        if has_video and has_audio:
-            muxed.append(entry)
-        elif has_video and not has_audio:
-            video_only.append(entry)
-
-    muxed.sort(key=lambda x: (x['height'] or 0, x['tbr']), reverse=True)
-    links = []
-    seen_heights = set()
-
-    for vf in muxed:
-        h = vf['height']
-        if h in seen_heights:
-            continue
-        seen_heights.add(h)
-        label = f"{h}p" if h else vf.get('format_note') or 'Video'
-        entry = {
-            'url': vf['url'],
-            'quality': label,
-            'format': 'mp4',
-            'size': _format_size(vf['filesize']),
-        }
-        if vf.get('format_id'):
-            entry['format_id'] = vf['format_id']
-        links.append(entry)
-
-    # HD video-only + best audio (for 1080p / 4K)
-    if video_only:
-        best_audio = None
-        for f in formats:
-            is_audio = (
-                f.get('acodec', 'none') not in ('none', None) and
-                f.get('vcodec', 'none') in ('none', None)
-            )
-            if is_audio and f.get('ext', '') in ('m4a', 'mp4', 'webm'):
-                if best_audio is None or (f.get('abr') or 0) > (best_audio.get('abr') or 0):
-                    best_audio = f
-
-        if best_audio:
-            audio_id = best_audio.get('format_id', '')
-            audio_size = best_audio.get('filesize') or best_audio.get('filesize_approx') or 0
-            yt_mp4 = sorted(
-                [f for f in video_only if f.get('ext') == 'mp4'],
-                key=lambda x: x['height'] or 0, reverse=True
-            )
-            for vf in yt_mp4:
-                h = vf['height']
-                if not h or h in seen_heights:
-                    continue
-                seen_heights.add(h)
-                vid_id = vf.get('format_id', '')
-                merged_id = f'{vid_id}+{audio_id}' if vid_id and audio_id else vid_id
-                total_size = (vf.get('filesize') or 0) + audio_size
-                links.append({
-                    'url': vf['url'],
-                    'quality': f'{h}p',
-                    'format': 'mp4',
-                    'size': _format_size(total_size) if total_size else '',
-                    'format_id': merged_id,
-                })
-
-    if not links and info.get('url'):
-        h = info.get('height')
-        links.append({
-            'url': info['url'],
-            'quality': f"{h}p" if h else 'Best Quality',
-            'format': info.get('ext', 'mp4'),
-            'size': _format_size(info.get('filesize') or info.get('filesize_approx')),
-        })
-
-    links.sort(
-        key=lambda x: int(x['quality'].replace('p', '')) if x['quality'].endswith('p') else 0,
-        reverse=True,
-    )
-    return links[:6]
+    return f"{int(seconds // 60)}:{int(seconds % 60):02d}"
 
 
 def extract_youtube(url, cookie_file=None):
     """
-    Extract YouTube video. Returns only validated (status=200, Content-Length>0) links.
-    Retries extraction up to _MAX_EXTRACT_RETRIES times across client chain.
+    Extract YouTube video metadata and return ONE download link.
+    The link URL is the original YouTube page URL — the proxy re-extracts
+    a fresh CDN URL at download time using yt-dlp (same server IP, no expiry).
     """
     base_opts = {
         'quiet': True,
@@ -250,20 +82,45 @@ def extract_youtube(url, cookie_file=None):
         'noplaylist': True,
         'socket_timeout': 30,
         'extractor_retries': 3,
+        'format': _FORMAT,
     }
     if cookie_file:
         base_opts['cookiefile'] = cookie_file
 
     last_exc = None
 
-    for attempt in range(1, _MAX_EXTRACT_RETRIES + 1):
-        info = None
-
+    for attempt in range(1, _MAX_RETRIES + 1):
         for client_set in _YT_CLIENT_SETS:
+            opts = {**base_opts, **client_set}
             try:
-                info = _extract_info_once(url, base_opts, client_set)
-                if info:
-                    break
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+                    if not info:
+                        continue
+
+                    title = info.get('title', 'YouTube Video')
+                    thumbnail = info.get('thumbnail', '')
+                    duration = _format_duration(info.get('duration'))
+
+                    result = {
+                        'success': True,
+                        'title': title,
+                        'thumbnail': thumbnail,
+                        'platform': 'youtube',
+                        'links': [
+                            {
+                                'url': url,
+                                'quality': 'Best Quality',
+                                'format': 'mp4',
+                                'size': '',
+                                'format_id': _FORMAT,
+                            }
+                        ],
+                    }
+                    if duration:
+                        result['duration'] = duration
+                    return result
+
             except yt_dlp.utils.DownloadError as e:
                 last_exc = e
                 msg = str(e).lower()
@@ -274,40 +131,9 @@ def extract_youtube(url, cookie_file=None):
                 last_exc = e
                 continue
 
-        if not info:
-            if attempt < _MAX_EXTRACT_RETRIES:
-                time.sleep(1)
-            continue
-
-        # Build candidate links
-        candidates = _build_links(info)
-
-        if not candidates:
-            if attempt < _MAX_EXTRACT_RETRIES:
-                time.sleep(1)
-            continue
-
-        # Validate each URL — remove broken / 403 / expired ones
-        valid_links = _validate_links_parallel(candidates)
-
-        if valid_links:
-            result = {
-                'success': True,
-                'title': info.get('title', 'YouTube Video'),
-                'thumbnail': info.get('thumbnail', ''),
-                'links': valid_links,
-                'platform': 'youtube',
-            }
-            dur = info.get('duration')
-            if dur:
-                result['duration'] = f"{int(dur // 60)}:{int(dur % 60):02d}"
-            return result
-
-        # All links failed validation — retry extraction
-        if attempt < _MAX_EXTRACT_RETRIES:
+        if attempt < _MAX_RETRIES:
             time.sleep(1)
 
-    # All attempts exhausted
     err = str(last_exc) if last_exc else ''
     if 'sign in' in err.lower() or 'bot' in err.lower() or 'login' in err.lower():
         return {
@@ -317,4 +143,4 @@ def extract_youtube(url, cookie_file=None):
     if 'private' in err.lower() or 'unavailable' in err.lower():
         return {'success': False, 'error': 'This video is private or unavailable.'}
 
-    return {'success': False, 'error': 'No valid download links found. Please try again.'}
+    return {'success': False, 'error': 'Could not extract video info. Please try again.'}

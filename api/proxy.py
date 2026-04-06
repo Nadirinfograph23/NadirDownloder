@@ -142,12 +142,25 @@ def _sanitise_filename(name):
     return re.sub(r'[^\w\s\-.]', '', name).strip() or 'video'
 
 
+_COOKIE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'cookies')
+
+
+def _cookie_file(platform):
+    path = os.path.join(_COOKIE_DIR, f'{platform}.txt')
+    return path if os.path.isfile(path) else None
+
+
 def _ydl_opts_for_platform(platform, format_id, tmp_path):
     """Build yt-dlp options for a given platform download."""
     _UA = (
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
         'AppleWebKit/537.36 (KHTML, like Gecko) '
         'Chrome/120.0.0.0 Safari/537.36'
+    )
+    _UA_MOBILE = (
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) '
+        'AppleWebKit/605.1.15 (KHTML, like Gecko) '
+        'Version/17.4 Mobile/15E148 Safari/604.1'
     )
     base = {
         'quiet': True,
@@ -158,7 +171,6 @@ def _ydl_opts_for_platform(platform, format_id, tmp_path):
         'extractor_retries': 3,
         'outtmpl': tmp_path,
         'overwrites': True,
-        # Ensure ffmpeg is used for merging video+audio streams
         'prefer_ffmpeg': True,
         'merge_output_format': 'mp4',
     }
@@ -168,19 +180,18 @@ def _ydl_opts_for_platform(platform, format_id, tmp_path):
         base['http_headers'] = {'User-Agent': _UA, 'Referer': 'https://www.tiktok.com/'}
 
     elif platform == 'instagram':
-        base['format'] = format_id or 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best'
-        base['http_headers'] = {'User-Agent': _UA}
+        base['format'] = format_id or 'best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best'
+        base['http_headers'] = {'User-Agent': _UA_MOBILE}
+        cf = _cookie_file('instagram')
+        if cf:
+            base['cookiefile'] = cf
 
     elif platform == 'twitter':
         base['format'] = format_id or 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best'
         base['http_headers'] = {'User-Agent': _UA}
 
     elif platform == 'youtube':
-        # tv_embedded: most reliable client for server-side downloads.
-        # No PO token needed, bypasses bot-detection, gives direct CDN URLs.
-        # Falls back to ios, then android_vr automatically via format selection.
-        _UA_ANDROID = 'com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip'
-        base['format'] = format_id or 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best'
+        base['format'] = format_id or 'best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best'
         base['http_headers'] = {'User-Agent': _UA}
         base['extractor_args'] = {
             'youtube': {
@@ -189,10 +200,11 @@ def _ydl_opts_for_platform(platform, format_id, tmp_path):
             }
         }
         base['age_limit'] = 99
+        cf = _cookie_file('youtube')
+        if cf:
+            base['cookiefile'] = cf
 
     elif platform == 'pinterest':
-        # Pinterest serves HLS (m3u8) streams. Use hls_use_mpegts so ffmpeg
-        # converts the stream directly to mp4 without needing to download first.
         base['format'] = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best[ext!=webm]/best'
         base['http_headers'] = {
             'User-Agent': _UA,
