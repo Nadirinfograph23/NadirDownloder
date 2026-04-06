@@ -18,12 +18,12 @@ import requests as _req
 MAX_PROXY_BYTES = 200 * 1024 * 1024  # 200 MB cap
 
 # Platforms that ALWAYS use yt-dlp to re-extract and download at proxy time.
-# - tiktok:   CDN URLs require fresh cookies at download time
+# - tiktok:    CDN URLs require fresh cookies at download time
 # - instagram: CDN URLs expire within 1-5 minutes after extraction
-# - twitter:  CDN URLs expire similarly fast
-# - youtube:  HD formats (720p+) are video-only; yt-dlp+ffmpeg merges video+audio
-# - pinterest: CDN links from savepin.app are unreliable; fresh yt-dlp is better
-YTDLP_PLATFORMS = {'tiktok', 'instagram', 'twitter', 'youtube', 'pinterest'}
+# - twitter:   CDN URLs expire similarly fast
+# - pinterest: CDN links are unreliable; fresh yt-dlp is better
+# NOTE: youtube is NOT here — it now uses process4.me direct links via ytdown.to API
+YTDLP_PLATFORMS = {'tiktok', 'instagram', 'twitter', 'pinterest'}
 
 # Platforms whose CDN URLs require server-side headers to download.
 # Domain patterns are anchored so that e.g. "evil-tiktokcdn.com" won't match.
@@ -114,12 +114,24 @@ PLATFORM_CONFIG = {
             ),
         },
     },
-    # YouTube and Pinterest are always handled by yt-dlp (in YTDLP_PLATFORMS),
-    # so domain_patterns and headers are unused — entries exist only to pass
-    # the PLATFORM_CONFIG membership check at the start of the handler.
+    # YouTube: now uses process4.me direct links (via ytdown.to API).
+    # Direct streaming — no yt-dlp needed.
     'youtube': {
-        'domain_patterns': [r'(^|\.)googlevideo\.com$', r'(^|\.)youtube\.com$'],
-        'headers': {},
+        'domain_patterns': [
+            r'^s\d+\.process4\.me$',
+            r'(^|\.)process4\.me$',
+            r'(^|\.)googlevideo\.com$',
+            r'(^|\.)youtube\.com$',
+        ],
+        'headers': {
+            'User-Agent': (
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/124.0.0.0 Safari/537.36'
+            ),
+            'Referer': 'https://app.ytdown.to/',
+            'Accept': 'video/mp4,video/*;q=0.9,*/*;q=0.8',
+        },
     },
 }
 
