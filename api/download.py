@@ -289,13 +289,48 @@ def _pinterest_page_scrape(url):
                 seen.add(mp4_url)
                 links.append({'url': mp4_url, 'quality': '720p', 'format': 'mp4', 'size': ''})
 
-        # Also look inside JSON-LD or script tags
+        # ── Extract from Next.js __NEXT_DATA__ embedded JSON ────────────────
+        next_data_m = re.search(
+            r'<script[^>]+id="__NEXT_DATA__"[^>]*>\s*(\{.*?\})\s*</script>',
+            html, re.DOTALL
+        )
+        if next_data_m:
+            try:
+                next_json = json.loads(next_data_m.group(1))
+                nd_links = _parse_pinterest_api_response(next_json)
+                for l in nd_links:
+                    if l['url'] not in seen:
+                        seen.add(l['url'])
+                        links.append(l)
+            except Exception:
+                pass
+
+        # ── Extract from __PWS_INITIAL_PROPS__ or __PWS_DATA__ ───────────────
+        for pws_pat in [
+            r'__PWS_INITIAL_PROPS__\s*=\s*(\{.*?\})\s*;',
+            r'__PWS_DATA__\s*=\s*(\{.*?\})\s*;',
+            r'P\.start\.start\(\s*(\{.*?\})\s*\)',
+        ]:
+            pws_m = re.search(pws_pat, html, re.DOTALL)
+            if pws_m:
+                try:
+                    pws_json = json.loads(pws_m.group(1))
+                    pws_links = _parse_pinterest_api_response(pws_json)
+                    for l in pws_links:
+                        if l['url'] not in seen:
+                            seen.add(l['url'])
+                            links.append(l)
+                except Exception:
+                    pass
+
+        # ── Also look inside all <script> tags for pinimg.com URLs ───────────
         soup = _BS(html, 'html.parser')
         for script in soup.find_all('script'):
             content = script.string or ''
             if 'pinimg.com' not in content:
                 continue
             extra_mp4 = re.findall(r'https://v\d+\.pinimg\.com/videos/[^"\'\\&\s]+\.mp4', content)
+            extra_m3u8 = re.findall(r'https://v\d+\.pinimg\.com/videos/[^"\'\\&\s]+\.m3u8', content)
             for u in extra_mp4:
                 u = u.replace('\\/', '/')
                 if u not in seen:
@@ -306,6 +341,12 @@ def _pinterest_page_scrape(url):
                             q = res
                             break
                     links.append({'url': u, 'quality': q, 'format': 'mp4', 'size': ''})
+            for u in extra_m3u8:
+                u = u.replace('\\/', '/')
+                mp4_url = _hls_to_direct_mp4(u)
+                if mp4_url and mp4_url not in seen:
+                    seen.add(mp4_url)
+                    links.append({'url': mp4_url, 'quality': '720p', 'format': 'mp4', 'size': ''})
 
         return links
     except Exception:
@@ -357,6 +398,113 @@ def _fetch_pinterest_savepin(url):
         return links[:4]
     except Exception:
         return []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Instagram Scraper — embed page extraction (public content, no login needed)
+# ─────────────────────────────────────────────────────────────────────────────
+def _fetch_instagram_video(url):
+    """
+    Multi-strategy Instagram video extractor for public posts (no cookies needed).
+
+    Strategy 1: Scrape the /embed/captioned/ page — Instagram renders video URLs
+                in the embed HTML even without a logged-in session.
+    Strategy 2: Scrape meta tags (og:video) from the main post page.
+    Strategy 3: Extract from JSON-LD or inline JSON in the page source.
+    """
+    m = re.search(r'/(?:p|reel|tv|videos)/([A-Za-z0-9_-]+)', url)
+    if not m:
+        return []
+    shortcode = m.group(1)
+
+    headers_embed = {
+        'User-Agent': (
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+            'AppleWebKit/537.36 (KHTML, like Gecko) '
+            'Chrome/124.0.0.0 Safari/537.36'
+        ),
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': 'https://www.instagram.com/',
+        'Sec-Fetch-Mode': 'navigate',
+    }
+
+    links = []
+    seen = set()
+
+    # ── Strategy 1: embed page ───────────────────────────────────────────────
+    for embed_url in [
+        f'https://www.instagram.com/p/{shortcode}/embed/captioned/',
+        f'https://www.instagram.com/p/{shortcode}/embed/',
+    ]:
+        try:
+            resp = _requests.get(embed_url, headers=headers_embed, timeout=15)
+            if resp.status_code != 200:
+                continue
+            html = resp.text
+
+            # Various patterns Instagram uses in the embed HTML
+            patterns = [
+                r'data-video-url="([^"]+)"',
+                r'"videoUrl"\s*:\s*"([^"]+)"',
+                r'"video_url"\s*:\s*"([^"]+)"',
+                r'<video[^>]+src="([^"]+)"',
+                r'\\u0022src\\u0022:\\u0022(https://[^\\]+\.mp4[^\\]*)',
+                r'"src":"(https://[^"]+\.mp4[^"]*)"',
+            ]
+            for pat in patterns:
+                for vu in re.findall(pat, html):
+                    vu = (vu.replace('\\u0026', '&')
+                            .replace('\\/', '/')
+                            .replace('&amp;', '&')
+                            .replace('\\u003C', '<'))
+                    if vu.startswith('http') and vu not in seen and (
+                            'cdninstagram' in vu or 'fbcdn' in vu or '.mp4' in vu):
+                        seen.add(vu)
+                        hm = re.search(r'(\d{3,4})p', vu)
+                        quality = f'{hm.group(1)}p' if hm else 'Best Quality'
+                        links.append({'url': vu, 'quality': quality,
+                                      'format': 'mp4', 'size': ''})
+
+            if links:
+                return links[:4]
+        except Exception:
+            continue
+
+    # ── Strategy 2: og:video meta tag from main page ─────────────────────────
+    for post_url in [
+        f'https://www.instagram.com/p/{shortcode}/',
+        f'https://www.instagram.com/reel/{shortcode}/',
+    ]:
+        try:
+            resp = _requests.get(post_url, headers=headers_embed, timeout=15)
+            if resp.status_code != 200:
+                continue
+            html = resp.text
+
+            # og:video meta tags
+            for vu in re.findall(
+                    r'<meta[^>]+property="og:video(?::secure_url)?"[^>]+content="([^"]+)"', html):
+                vu = vu.replace('&amp;', '&')
+                if vu.startswith('http') and vu not in seen:
+                    seen.add(vu)
+                    links.append({'url': vu, 'quality': 'Best Quality',
+                                  'format': 'mp4', 'size': ''})
+
+            # Inline JSON: look for video_url in page source
+            for vu in re.findall(r'"video_url"\s*:\s*"(https://[^"]+)"', html):
+                vu = vu.replace('\\/', '/').replace('&amp;', '&')
+                if vu not in seen and ('cdninstagram' in vu or 'fbcdn' in vu):
+                    seen.add(vu)
+                    links.append({'url': vu, 'quality': 'Best Quality',
+                                  'format': 'mp4', 'size': ''})
+
+            if links:
+                return links[:4]
+        except Exception:
+            continue
+
+    return links
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -429,6 +577,9 @@ def extract_video_info(url):
         scraped_links = _fetch_facebook_video(url)
     elif platform == 'pinterest':
         scraped_links = _fetch_pinterest_video(url)
+    elif platform == 'instagram':
+        # Try embed-page scraping first (no cookies needed for public posts)
+        scraped_links = _fetch_instagram_video(url)
 
     _UA_DESKTOP = (
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
@@ -459,13 +610,36 @@ def extract_video_info(url):
         base_ydl_opts['cookiefile'] = cf
 
     # ── Per-platform retry option sets ───────────────────────────────────────
-    # YouTube: android_vr and web_safari don't require PO tokens and return
-    # full HD format lists (144p–2160p) from server IPs without authentication.
+    # YouTube: tv_embedded is the most reliable client — it doesn't need a
+    # PO token, bypasses bot-detection, and returns full HD format lists.
+    # ios gives direct CDN URLs. android_vr + web_safari as final fallback.
     _PLATFORM_RETRY_SETS = {
         'youtube': [
-            # Attempt 1: android_vr + web_safari — current yt-dlp defaults, no PO token needed
+            # Attempt 1: tv_embedded — most reliable without PO token
             {
                 'http_headers': {'User-Agent': _UA_DESKTOP},
+                'extractor_args': {
+                    'youtube': {
+                        'player_client': ['tv_embedded'],
+                        'player_skip': ['configs', 'webpage'],
+                    }
+                },
+                'age_limit': 99,
+            },
+            # Attempt 2: ios + android_vr — direct CDN URLs, no signature needed
+            {
+                'http_headers': {'User-Agent': _UA_MOBILE},
+                'extractor_args': {
+                    'youtube': {
+                        'player_client': ['ios', 'android_vr'],
+                        'player_skip': ['configs'],
+                    }
+                },
+                'age_limit': 99,
+            },
+            # Attempt 3: android_vr + web_safari (original proven combo)
+            {
+                'http_headers': {'User-Agent': _UA_ANDROID},
                 'extractor_args': {
                     'youtube': {
                         'player_client': ['android_vr', 'web_safari'],
@@ -474,18 +648,7 @@ def extract_video_info(url):
                 },
                 'age_limit': 99,
             },
-            # Attempt 2: android_vr only
-            {
-                'http_headers': {'User-Agent': _UA_ANDROID},
-                'extractor_args': {
-                    'youtube': {
-                        'player_client': ['android_vr'],
-                        'player_skip': ['configs'],
-                    }
-                },
-                'age_limit': 99,
-            },
-            # Attempt 3: bare default (yt-dlp picks best available clients)
+            # Attempt 4: bare default (yt-dlp selects best available client)
             {
                 'http_headers': {'User-Agent': _UA_DESKTOP},
                 'age_limit': 99,
@@ -503,8 +666,15 @@ def extract_video_info(url):
             {'http_headers': {'User-Agent': _UA_DESKTOP}},
         ],
         'instagram': [
+            # Mobile UA — Instagram prefers mobile requests for embed content
             {'http_headers': {'User-Agent': _UA_MOBILE}},
+            # Desktop UA fallback
             {'http_headers': {'User-Agent': _UA_DESKTOP}},
+            # Try with app API flag
+            {
+                'http_headers': {'User-Agent': _UA_MOBILE},
+                'extractor_args': {'instagram': {'api': ['1']}},
+            },
         ],
         'twitter': [
             {'http_headers': {'User-Agent': _UA_DESKTOP}},
@@ -575,6 +745,20 @@ def extract_video_info(url):
             'original_url': url,
             'platform': platform,
         }
+
+    # Instagram: if embed-page scraping found links, use them (avoids auth wall)
+    # Still fall through to yt-dlp if scraping found nothing (e.g. private posts)
+    if platform == 'instagram' and scraped_links:
+        working = _filter_working_links(scraped_links, platform)
+        if working:
+            return {
+                'success': True,
+                'title': 'Instagram Video',
+                'thumbnail': '',
+                'links': working[:4],
+                'original_url': url,
+                'platform': platform,
+            }
 
     try:
         info = _ydlp_extract_chain(url, platform)
