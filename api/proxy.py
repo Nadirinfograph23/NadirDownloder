@@ -23,7 +23,7 @@ MAX_PROXY_BYTES = 200 * 1024 * 1024  # 200 MB cap
 # - twitter:   CDN URLs expire similarly fast
 # - pinterest: CDN links are unreliable; fresh yt-dlp is better
 # NOTE: youtube is NOT here — it now uses process4.me direct links via ytdown.to API
-YTDLP_PLATFORMS = {'tiktok', 'instagram', 'twitter', 'pinterest'}
+YTDLP_PLATFORMS = {'tiktok', 'twitter'}
 
 # Platforms whose CDN URLs require server-side headers to download.
 # Domain patterns are anchored so that e.g. "evil-tiktokcdn.com" won't match.
