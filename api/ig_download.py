@@ -1,28 +1,19 @@
 """
-NADIR DOWNLOADER - Dedicated Instagram Download Endpoint
+NADIR DOWNLOADER - Instagram Download via RapidAPI
 /api/ig-download?url=<original_instagram_url>
 
-Extracts a fresh CDN URL via yt-dlp on every request (never cached),
-validates it, then streams the video directly to the client with
-Content-Disposition: attachment so the browser downloads it immediately.
+Uses the Instagram Downloader RapidAPI service to get a fresh video URL,
+then streams the video bytes directly to the client.
 
-Fallback chain (up to 3 retries per attempt):
-  1. yt-dlp — no cookies, mobile UA
-  2. yt-dlp — no cookies, desktop UA
-  3. yt-dlp — with cookies (cookies/instagram.txt), mobile UA
-  4. yt-dlp — with cookies, desktop UA + extractor_args api=1
-
-No raw CDN URL is ever returned to the frontend — all video bytes are
-proxied through this endpoint so the browser never sees an Instagram URL.
+Requires: RAPIDAPI_KEY environment variable
+Fallback: yt-dlp (for public posts when RapidAPI key is absent)
 """
 
 from http.server import BaseHTTPRequestHandler
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, quote
 import os
 import re
-import time
 import json
-import yt_dlp
 import requests as _req
 
 _UA_MOBILE = (
@@ -30,190 +21,207 @@ _UA_MOBILE = (
     'AppleWebKit/537.36 (KHTML, like Gecko) '
     'Chrome/124.0.0.0 Mobile Safari/537.36'
 )
-_UA_DESKTOP = (
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-    'AppleWebKit/537.36 (KHTML, like Gecko) '
-    'Chrome/124.0.0.0 Safari/537.36'
-)
 
-# Prefer a muxed mp4 (no ffmpeg needed on Vercel).
-# Fall back to best available if no muxed mp4 exists.
-_IG_FORMAT = (
-    'best[ext=mp4][vcodec!=none][acodec!=none]'
-    '/best[ext=mp4]'
-    '/best[vcodec!=none][acodec!=none]'
-    '/best'
+_RAPIDAPI_HOST = (
+    'instagram-downloader-download-instagram-videos-stories1'
+    '.p.rapidapi.com'
 )
+_RAPIDAPI_ENDPOINT = f'https://{_RAPIDAPI_HOST}/get-info-rapidapi'
 
-_MAX_RETRIES = 3
-_COOKIE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'cookies')
 _MAX_STREAM_BYTES = 500 * 1024 * 1024  # 500 MB cap
 
 
-def _cookie_file():
-    p = os.path.join(_COOKIE_DIR, 'instagram.txt')
-    return p if os.path.isfile(p) else None
+# ─────────────────────────────────────────────────────────────────────────────
+# RapidAPI extraction
+# ─────────────────────────────────────────────────────────────────────────────
 
-
-def _extract_cdn_url(ig_url):
+def _fetch_via_rapidapi(ig_url):
     """
-    Use yt-dlp (skip_download=True) to get a fresh CDN URL.
-    Tries multiple UA / cookie combinations.
-    Returns (cdn_url, filename_hint) or raises RuntimeError.
+    Call the RapidAPI Instagram Downloader service.
+    Returns (download_url, safe_title) or raises RuntimeError.
     """
-    cookie_file = _cookie_file()
+    api_key = os.environ.get('RAPIDAPI_KEY', '').strip()
+    if not api_key:
+        raise RuntimeError('__no_key__')
 
-    attempt_configs = [
-        # 1. No cookies, mobile UA
-        {'http_headers': {'User-Agent': _UA_MOBILE}, 'cookiefile': None},
-        # 2. No cookies, desktop UA
-        {'http_headers': {'User-Agent': _UA_DESKTOP}, 'cookiefile': None},
-        # 3. With cookies, mobile UA
-        {'http_headers': {'User-Agent': _UA_MOBILE}, 'cookiefile': cookie_file},
-        # 4. With cookies, desktop UA + api extractor arg
-        {
-            'http_headers': {'User-Agent': _UA_DESKTOP},
-            'cookiefile': cookie_file,
-            'extractor_args': {'instagram': {'api': ['1']}},
-        },
-    ]
+    encoded_url = quote(ig_url, safe='')
+    try:
+        resp = _req.get(
+            f'{_RAPIDAPI_ENDPOINT}?url={encoded_url}',
+            headers={
+                'x-rapidapi-key': api_key,
+                'x-rapidapi-host': _RAPIDAPI_HOST,
+            },
+            timeout=20,
+        )
+    except Exception as e:
+        raise RuntimeError(f'RapidAPI request failed: {e}')
 
-    last_error = None
+    if resp.status_code in (401, 403):
+        raise RuntimeError('RapidAPI key is invalid or expired.')
+    if resp.status_code == 429:
+        raise RuntimeError('RapidAPI rate limit reached. Please try again later.')
+    if resp.status_code >= 400:
+        raise RuntimeError(f'RapidAPI returned status {resp.status_code}.')
 
-    for attempt_num in range(1, _MAX_RETRIES + 1):
-        for cfg in attempt_configs:
-            opts = {
-                'quiet': True,
-                'no_warnings': True,
-                'skip_download': True,
-                'noplaylist': True,
-                'socket_timeout': 30,
-                'extractor_retries': 2,
-                'format': _IG_FORMAT,
-                'http_headers': cfg['http_headers'],
-            }
-            if cfg.get('cookiefile') and os.path.exists(cfg['cookiefile']):
-                opts['cookiefile'] = cfg['cookiefile']
-            if cfg.get('extractor_args'):
-                opts['extractor_args'] = cfg['extractor_args']
+    try:
+        data = resp.json()
+    except Exception:
+        raise RuntimeError('RapidAPI returned an invalid JSON response.')
 
-            try:
-                with yt_dlp.YoutubeDL(opts) as ydl:
-                    info = ydl.extract_info(ig_url, download=False)
-                    if not info:
-                        continue
-
-                    cdn_url = info.get('url') or ''
-                    title = (info.get('title') or 'instagram_video').strip()
-                    # Sanitise title for use in filename
-                    safe_title = re.sub(r'[^\w\s\-]', '', title)[:60].strip() or 'instagram_video'
-
-                    if cdn_url and (
-                        'cdninstagram' in cdn_url or
-                        'fbcdn' in cdn_url or
-                        cdn_url.startswith('http')
-                    ):
-                        return cdn_url, safe_title
-
-                    # Fallback: check requested_formats
-                    for rf in (info.get('requested_formats') or []):
-                        rf_url = rf.get('url', '')
-                        rf_v = rf.get('vcodec', 'none')
-                        rf_a = rf.get('acodec', 'none')
-                        if rf_url and rf_v != 'none' and rf_a != 'none':
-                            return rf_url, safe_title
-
-                    # Last resort: any format with video
-                    for f in (info.get('formats') or []):
-                        f_url = f.get('url', '')
-                        if f_url and f.get('vcodec', 'none') != 'none':
-                            return f_url, safe_title
-
-            except yt_dlp.utils.DownloadError as e:
-                last_error = str(e)
-                # Private / unavailable — no point retrying
-                msg = last_error.lower()
-                if any(k in msg for k in ('private', 'unavailable', 'not found', '404')):
-                    raise RuntimeError(
-                        'This Instagram post is private, deleted, or unavailable.'
-                    )
-            except Exception as e:
-                last_error = str(e)
-
-        if attempt_num < _MAX_RETRIES:
-            time.sleep(1.5)
-
-    raise RuntimeError(
-        last_error or 'Could not extract Instagram video after multiple attempts.'
+    download_url = (
+        data.get('download_url')
+        or data.get('video_url')
+        or data.get('url')
+        or ''
     )
 
+    if not download_url:
+        medias = data.get('medias') or data.get('media') or []
+        if isinstance(medias, list):
+            for m in medias:
+                if isinstance(m, dict):
+                    u = m.get('url') or m.get('download_url') or ''
+                    if u and u.startswith('http'):
+                        download_url = u
+                        break
 
-def _validate_cdn_url(cdn_url):
+    if not download_url:
+        for v in data.values():
+            if isinstance(v, str) and v.startswith('http') and (
+                'mp4' in v or 'video' in v.lower() or 'cdn' in v.lower()
+            ):
+                download_url = v
+                break
+
+    if not download_url:
+        raise RuntimeError(
+            'Could not extract video URL from Instagram. '
+            'The post may be private or not a video.'
+        )
+
+    raw_title = (
+        data.get('title')
+        or data.get('caption')
+        or data.get('shortcode')
+        or 'instagram_video'
+    )
+    safe_title = re.sub(r'[^\w\s\-]', '', str(raw_title))[:60].strip() or 'instagram_video'
+
+    return download_url, safe_title
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# yt-dlp fallback (no-auth, public posts only)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _fetch_via_ytdlp(ig_url):
     """
-    HEAD request to check the CDN URL is alive.
-    Returns (ok: bool, content_length: str or '').
+    Fallback: try yt-dlp without cookies. Works only for some public posts.
+    Returns (download_url, safe_title) or raises RuntimeError.
     """
     try:
-        r = _req.head(
-            cdn_url,
-            headers={
-                'User-Agent': _UA_MOBILE,
-                'Referer': 'https://www.instagram.com/',
-            },
-            timeout=10,
-            allow_redirects=True,
-        )
-        if r.status_code >= 400:
-            return False, ''
-        ct = r.headers.get('Content-Type', '')
-        if 'html' in ct or 'xml' in ct or 'json' in ct:
-            return False, ''
-        cl = r.headers.get('Content-Length', '')
-        if cl and int(cl) == 0:
-            return False, ''
-        return True, cl
-    except Exception:
-        return False, ''
+        import yt_dlp
+    except ImportError:
+        raise RuntimeError('yt-dlp is not available.')
 
+    opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'skip_download': True,
+        'noplaylist': True,
+        'socket_timeout': 25,
+        'extractor_retries': 1,
+        'format': (
+            'best[ext=mp4][vcodec!=none][acodec!=none]'
+            '/best[ext=mp4]/best[vcodec!=none][acodec!=none]/best'
+        ),
+        'http_headers': {'User-Agent': _UA_MOBILE},
+    }
+
+    # Use cookies from env if available
+    session_id = os.environ.get('IG_SESSION_ID', '').strip()
+    if session_id:
+        import tempfile
+        cookie_content = '\n'.join([
+            '# Netscape HTTP Cookie File',
+            f'.instagram.com\tTRUE\t/\tTRUE\t9999999999\tsessionid\t{session_id}',
+        ]) + '\n'
+        tf = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', dir='/tmp', delete=False)
+        tf.write(cookie_content)
+        tf.close()
+        opts['cookiefile'] = tf.name
+
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(ig_url, download=False)
+
+    if not info:
+        raise RuntimeError('yt-dlp returned no info.')
+
+    url = info.get('url') or ''
+    title = (info.get('title') or 'instagram_video').strip()
+    safe_title = re.sub(r'[^\w\s\-]', '', title)[:60].strip() or 'instagram_video'
+
+    if url and url.startswith('http'):
+        return url, safe_title
+
+    for rf in (info.get('requested_formats') or []):
+        u = rf.get('url', '')
+        if u and rf.get('vcodec', 'none') != 'none' and rf.get('acodec', 'none') != 'none':
+            return u, safe_title
+
+    for f in (info.get('formats') or []):
+        u = f.get('url', '')
+        if u and f.get('vcodec', 'none') != 'none':
+            return u, safe_title
+
+    raise RuntimeError('yt-dlp could not find a playable stream.')
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Main stream function
+# ─────────────────────────────────────────────────────────────────────────────
 
 def stream_instagram(ig_url):
     """
-    Main logic: extract CDN URL, validate, then stream.
-    Returns (status_code, headers_dict, generator_or_error_body).
+    1. Try RapidAPI (requires RAPIDAPI_KEY env var).
+    2. Fall back to yt-dlp for public posts.
+    Returns (status_code, headers_dict, body_bytes_or_generator).
     """
-    # Retry the full extract+validate cycle up to 3 times
     cdn_url = None
     safe_title = 'instagram_video'
-    last_error = 'Unknown extraction error.'
 
-    for cycle in range(1, _MAX_RETRIES + 1):
-        try:
-            cdn_url, safe_title = _extract_cdn_url(ig_url)
-        except RuntimeError as e:
+    # Step 1: RapidAPI
+    try:
+        cdn_url, safe_title = _fetch_via_rapidapi(ig_url)
+    except RuntimeError as e:
+        if str(e) != '__no_key__':
             return (
                 502,
                 {'Content-Type': 'application/json'},
                 json.dumps({'error': str(e)}).encode(),
             )
-
-        ok, content_length = _validate_cdn_url(cdn_url)
-        if ok:
-            break
-
-        # CDN URL invalid/expired — retry extraction
+        # No key — fall through to yt-dlp
         cdn_url = None
-        last_error = 'CDN URL expired or invalid. Retrying...'
-        if cycle < _MAX_RETRIES:
-            time.sleep(1)
 
+    # Step 2: yt-dlp fallback
     if cdn_url is None:
-        return (
-            502,
-            {'Content-Type': 'application/json'},
-            json.dumps({'error': 'Instagram CDN link expired. Please try again.'}).encode(),
-        )
+        try:
+            cdn_url, safe_title = _fetch_via_ytdlp(ig_url)
+        except Exception as e:
+            err_msg = str(e)
+            if 'login' in err_msg.lower() or 'empty media' in err_msg.lower() or 'authentication' in err_msg.lower():
+                err_msg = (
+                    'Instagram requires authentication to download this video. '
+                    'Please configure RAPIDAPI_KEY to enable Instagram downloads.'
+                )
+            return (
+                502,
+                {'Content-Type': 'application/json'},
+                json.dumps({'error': err_msg}).encode(),
+            )
 
-    # Stream the CDN URL
+    # Stream the video
     try:
         resp = _req.get(
             cdn_url,
@@ -224,6 +232,7 @@ def stream_instagram(ig_url):
             },
             timeout=30,
             stream=True,
+            allow_redirects=True,
         )
         if resp.status_code >= 400:
             return (
@@ -242,9 +251,7 @@ def stream_instagram(ig_url):
             'Access-Control-Allow-Origin': '*',
             'Cache-Control': 'no-store',
         }
-        if content_length:
-            out_headers['Content-Length'] = content_length
-        elif resp.headers.get('Content-Length'):
+        if resp.headers.get('Content-Length'):
             out_headers['Content-Length'] = resp.headers['Content-Length']
 
         def _gen():
@@ -268,6 +275,10 @@ def stream_instagram(ig_url):
         )
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Vercel serverless handler
+# ─────────────────────────────────────────────────────────────────────────────
+
 class handler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         self.send_response(200)
@@ -285,7 +296,6 @@ class handler(BaseHTTPRequestHandler):
             self._send_error(400, 'Missing or invalid url parameter')
             return
 
-        # Basic check — must be an Instagram URL
         if not re.search(r'instagram\.com|instagr\.am', ig_url, re.I):
             self._send_error(400, 'URL is not an Instagram link')
             return
