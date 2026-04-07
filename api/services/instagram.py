@@ -2,21 +2,20 @@
 Instagram download service.
 
 Strategy:
-1. yt-dlp without cookies (fastest, works for many public posts)
-2. yt-dlp with cookies (if cookies/instagram.txt exists)
-3. snapinsta.app scraper fallback
-4. Instagram embed page scraping
+1. snapinsta.app scraper — returns actual CDN URLs (no login needed)
+2. instasave.io API fallback
+3. yt-dlp without cookies (fastest, works for some public posts)
+4. yt-dlp with cookies (if cookies/instagram.txt exists)
+5. Instagram embed page scraping
 
-The returned link URL is the ORIGINAL Instagram URL so the proxy
-re-extracts a fresh CDN URL at download time (avoids expiry on Vercel).
-
-Returns ONE working download link. No URL validation (CDN URLs expire fast).
-Retries up to 3 times per strategy.
+The returned link URL is a direct CDN URL so the proxy can stream it
+without re-running yt-dlp (which requires login and is blocked by Instagram).
 """
 
 import os
 import re
 import time
+import json
 import requests as _requests
 import yt_dlp
 
@@ -32,7 +31,11 @@ _UA_MOBILE = (
 )
 
 _FORMAT = 'best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best'
-_MAX_RETRIES = 3
+_MAX_RETRIES = 2
+
+_CDN_RE = re.compile(
+    r'https://[^\s"\'<>&]+(?:cdninstagram\.com|fbcdn\.net)[^\s"\'<>&]*\.mp4[^\s"\'<>&]*'
+)
 
 
 def _get_shortcode(url):
@@ -40,54 +43,30 @@ def _get_shortcode(url):
     return m.group(1) if m else None
 
 
-def _try_ytdlp(url, cookie_file=None):
-    """
-    Try yt-dlp extraction. Returns (title, thumbnail) on success, or None on failure.
-    Does NOT validate CDN URLs — they expire too quickly on serverless.
-    """
-    base_opts = {
-        'quiet': True,
-        'no_warnings': True,
-        'skip_download': True,
-        'noplaylist': True,
-        'socket_timeout': 30,
-        'extractor_retries': 3,
-        'format': _FORMAT,
-    }
-    if cookie_file and os.path.exists(cookie_file):
-        base_opts['cookiefile'] = cookie_file
-
-    ua_list = [_UA_MOBILE, _UA_DESKTOP]
-
-    for attempt in range(1, _MAX_RETRIES + 1):
-        for ua in ua_list:
-            try:
-                opts = {**base_opts, 'http_headers': {'User-Agent': ua}}
-                with yt_dlp.YoutubeDL(opts) as ydl:
-                    info = ydl.extract_info(url, download=False)
-                    if info:
-                        title = info.get('title', '') or ''
-                        thumbnail = info.get('thumbnail', '') or ''
-                        return title, thumbnail
-            except Exception:
-                pass
-
-        if attempt < _MAX_RETRIES:
-            time.sleep(1)
-
-    return None
-
+# ── Strategy 1: snapinsta.app ────────────────────────────────────────────────
 
 def _try_snapinsta(url):
-    """Try snapinsta.app as a scraper fallback. Returns True if video likely exists."""
+    """
+    Scrape snapinsta.app to get direct CDN video URLs.
+    Returns a list of {'url': cdn_url, 'quality': ..., 'format': 'mp4', 'size': ''}
+    """
     try:
         session = _requests.Session()
-        session.headers.update({'User-Agent': _UA_DESKTOP})
+        session.headers.update({
+            'User-Agent': _UA_DESKTOP,
+            'Accept-Language': 'en-US,en;q=0.9',
+        })
+
+        # Get CSRF token
         home = session.get('https://snapinsta.app/', timeout=15)
         if home.status_code != 200:
-            return False
+            return []
+
         token_m = re.search(r'name="_token"\s+value="([^"]+)"', home.text)
+        if not token_m:
+            token_m = re.search(r'"_token"\s*:\s*"([^"]+)"', home.text)
         token = token_m.group(1) if token_m else ''
+
         resp = session.post(
             'https://snapinsta.app/action.php',
             data={'url': url, 'lang': 'en', 'q': url, 'token': token},
@@ -99,33 +78,178 @@ def _try_snapinsta(url):
             },
             timeout=20,
         )
+
         if resp.status_code != 200:
-            return False
+            return []
+
         ct = resp.headers.get('Content-Type', '')
-        data = resp.json() if 'json' in ct else {}
-        html_content = data.get('data') or resp.text
-        video_urls = re.findall(
-            r'https://[^\s"\'<>]*(?:cdninstagram|fbcdn)[^\s"\'<>]*\.mp4[^\s"\'<>]*',
+        if 'json' in ct:
+            try:
+                data = resp.json()
+                html_content = data.get('data', '') or ''
+            except Exception:
+                html_content = resp.text
+        else:
+            html_content = resp.text
+
+        # Unescape HTML entities and unicode escapes
+        html_content = (html_content
+                        .replace('\\u0026', '&')
+                        .replace('\\/', '/')
+                        .replace('&amp;', '&')
+                        .replace('%2F', '/'))
+
+        cdn_urls = _CDN_RE.findall(html_content)
+
+        # Also look for href attributes containing CDN URLs
+        href_matches = re.findall(
+            r'href=["\']([^"\']*(?:cdninstagram\.com|fbcdn\.net)[^"\']*\.mp4[^"\']*)["\']',
             html_content,
         )
-        return len(video_urls) > 0
-    except Exception:
-        return False
+        cdn_urls.extend(href_matches)
 
+        seen = set()
+        links = []
+        for u in cdn_urls:
+            u = u.strip().rstrip('\\').rstrip('"').rstrip("'")
+            if u in seen or not u.startswith('http'):
+                continue
+            seen.add(u)
+            links.append({
+                'url': u,
+                'quality': 'Best Quality',
+                'format': 'mp4',
+                'size': '',
+            })
+
+        return links[:3]
+
+    except Exception:
+        return []
+
+
+# ── Strategy 2: instasave.io ─────────────────────────────────────────────────
+
+def _try_instasave(url):
+    """
+    Try instasave.io as a fallback scraper.
+    Returns a list of CDN link dicts.
+    """
+    try:
+        session = _requests.Session()
+        session.headers.update({'User-Agent': _UA_DESKTOP})
+
+        home = session.get('https://instasave.io/', timeout=15)
+        if home.status_code != 200:
+            return []
+
+        token_m = re.search(r'name="_token"\s+value="([^"]+)"', home.text)
+        token = token_m.group(1) if token_m else ''
+
+        resp = session.post(
+            'https://instasave.io/download',
+            data={'url': url, '_token': token},
+            headers={
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Referer': 'https://instasave.io/',
+                'Origin': 'https://instasave.io',
+            },
+            timeout=20,
+        )
+
+        if resp.status_code != 200:
+            return []
+
+        html_content = resp.text.replace('\\/', '/').replace('&amp;', '&')
+        cdn_urls = _CDN_RE.findall(html_content)
+
+        seen = set()
+        links = []
+        for u in cdn_urls:
+            u = u.strip()
+            if u in seen or not u.startswith('http'):
+                continue
+            seen.add(u)
+            links.append({'url': u, 'quality': 'Best Quality', 'format': 'mp4', 'size': ''})
+
+        return links[:3]
+
+    except Exception:
+        return []
+
+
+# ── Strategy 3: yt-dlp ───────────────────────────────────────────────────────
+
+def _try_ytdlp(url, cookie_file=None):
+    """
+    Try yt-dlp extraction. Returns (title, thumbnail, cdn_url) on success, or None.
+    """
+    base_opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'skip_download': True,
+        'noplaylist': True,
+        'socket_timeout': 30,
+        'extractor_retries': 2,
+        'format': _FORMAT,
+    }
+    if cookie_file and os.path.exists(cookie_file):
+        base_opts['cookiefile'] = cookie_file
+
+    for ua in [_UA_MOBILE, _UA_DESKTOP]:
+        try:
+            opts = {**base_opts, 'http_headers': {'User-Agent': ua}}
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                if not info:
+                    continue
+                title = info.get('title', '') or ''
+                thumbnail = info.get('thumbnail', '') or ''
+
+                # Try to get a direct CDN URL
+                cdn_url = None
+                for f in (info.get('formats') or []):
+                    fu = f.get('url', '')
+                    if fu and ('cdninstagram' in fu or 'fbcdn' in fu) and fu.startswith('http'):
+                        cdn_url = fu
+                        break
+                if not cdn_url:
+                    fu = info.get('url', '')
+                    if fu and ('cdninstagram' in fu or 'fbcdn' in fu):
+                        cdn_url = fu
+
+                if cdn_url:
+                    return title, thumbnail, cdn_url
+                elif title:
+                    return title, thumbnail, None
+        except Exception:
+            pass
+
+    return None
+
+
+# ── Strategy 4: embed page ───────────────────────────────────────────────────
 
 def _try_embed_page(url):
     """
-    Check if the embed page reveals a video (public post detection).
-    Returns True if a video URL is found in the embed HTML.
+    Scrape the Instagram embed page for CDN video URLs.
+    Returns list of link dicts or empty list.
     """
     shortcode = _get_shortcode(url)
     if not shortcode:
-        return False
+        return []
 
     embed_urls = [
         f'https://www.instagram.com/p/{shortcode}/embed/captioned/',
         f'https://www.instagram.com/p/{shortcode}/embed/',
         f'https://www.instagram.com/reel/{shortcode}/embed/',
+    ]
+
+    patterns = [
+        r'data-video-url="([^"]+)"',
+        r'"videoUrl"\s*:\s*"([^"]+)"',
+        r'"video_url"\s*:\s*"([^"]+)"',
+        r'<video[^>]+src="([^"]+)"',
     ]
 
     for embed_url in embed_urls:
@@ -141,75 +265,91 @@ def _try_embed_page(url):
                 if resp.status_code not in (200, 304):
                     continue
                 html = resp.text
-                patterns = [
-                    r'data-video-url="([^"]+)"',
-                    r'"videoUrl"\s*:\s*"([^"]+)"',
-                    r'"video_url"\s*:\s*"([^"]+)"',
-                    r'<video[^>]+src="([^"]+)"',
-                ]
+
+                links = []
+                seen = set()
                 for pat in patterns:
                     for vu in re.findall(pat, html):
-                        vu = vu.replace('\\/', '/').replace('&amp;', '&')
+                        vu = (vu.replace('\\/', '/')
+                                .replace('&amp;', '&')
+                                .replace('\\u0026', '&'))
                         if vu.startswith('http') and ('cdninstagram' in vu or 'fbcdn' in vu):
-                            return True
+                            if vu not in seen:
+                                seen.add(vu)
+                                links.append({
+                                    'url': vu,
+                                    'quality': 'Best Quality',
+                                    'format': 'mp4',
+                                    'size': '',
+                                })
+
+                if links:
+                    return links[:2]
+
             except Exception:
                 continue
-    return False
 
+    return []
+
+
+# ── Main extractor ────────────────────────────────────────────────────────────
 
 def extract_instagram(url, cookie_file=None):
     """
-    Extract Instagram video. Returns ONE download link pointing to the original URL.
-    The proxy re-extracts a fresh CDN URL at download time (avoids expiry on Vercel).
+    Extract Instagram video. Tries multiple strategies to get direct CDN URLs
+    so the proxy can stream without re-running yt-dlp.
     """
 
-    def _success(title=''):
+    def _success(links, title='', thumbnail=''):
         return {
             'success': True,
             'title': title or 'Instagram Video',
-            'thumbnail': '',
+            'thumbnail': thumbnail or '',
             'platform': 'instagram',
-            'links': [
-                {
-                    'url': url,
-                    'quality': 'Best Quality',
-                    'format': 'mp4',
-                    'size': '',
-                    'format_id': _FORMAT,
-                }
-            ],
+            'links': links,
         }
 
-    # Strategy 1: yt-dlp without cookies (works for many public posts)
+    # Strategy 1: snapinsta (most reliable for public posts)
+    links = _try_snapinsta(url)
+    if links:
+        return _success(links)
+
+    # Strategy 2: instasave.io fallback
+    links = _try_instasave(url)
+    if links:
+        return _success(links)
+
+    # Strategy 3: yt-dlp (direct CDN URL extraction)
     result = _try_ytdlp(url, cookie_file=None)
     if result is not None:
-        title, thumbnail = result
-        resp = _success(title)
-        resp['thumbnail'] = thumbnail
-        return resp
+        title, thumbnail, cdn_url = result
+        if cdn_url:
+            return _success(
+                [{'url': cdn_url, 'quality': 'Best Quality', 'format': 'mp4', 'size': ''}],
+                title, thumbnail,
+            )
 
-    # Strategy 2: yt-dlp with cookies (if cookie file exists)
+    # Strategy 4: yt-dlp with cookies
     if cookie_file and os.path.exists(cookie_file):
         result = _try_ytdlp(url, cookie_file=cookie_file)
         if result is not None:
-            title, thumbnail = result
-            resp = _success(title)
-            resp['thumbnail'] = thumbnail
-            return resp
+            title, thumbnail, cdn_url = result
+            if cdn_url:
+                return _success(
+                    [{'url': cdn_url, 'quality': 'Best Quality', 'format': 'mp4', 'size': ''}],
+                    title, thumbnail,
+                )
 
-    # Strategy 3: snapinsta.app confirms video exists
-    if _try_snapinsta(url):
-        return _success()
-
-    # Strategy 4: embed page confirms video exists
-    if _try_embed_page(url):
-        return _success()
+    # Strategy 5: embed page scraping
+    links = _try_embed_page(url)
+    if links:
+        return _success(links)
 
     return {
         'success': False,
         'error': (
             'Could not extract this Instagram video. '
             'The post may be private or require login. '
-            'Add a cookies/instagram.txt file (Netscape format) to enable private post downloads.'
+            'Try refreshing or add a cookies/instagram.txt file (Netscape format) to enable private post downloads.'
         ),
     }
