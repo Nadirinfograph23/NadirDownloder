@@ -746,16 +746,18 @@ def extract_video_info(url):
             }
         return {'success': False, 'error': 'Could not extract Facebook video. The video may be private or unavailable.'}
 
-    # Pinterest: if direct scraping worked, return immediately without yt-dlp
+    # Pinterest: if direct scraping worked, filter and return immediately without yt-dlp
     if platform == 'pinterest' and scraped_links:
-        return {
-            'success': True,
-            'title': 'Pinterest Video',
-            'thumbnail': '',
-            'links': scraped_links[:6],
-            'original_url': url,
-            'platform': platform,
-        }
+        working = _filter_working_links(scraped_links, platform)
+        if working:
+            return {
+                'success': True,
+                'title': 'Pinterest Video',
+                'thumbnail': '',
+                'links': working[:6],
+                'original_url': url,
+                'platform': platform,
+            }
 
     # Instagram: if embed-page scraping found links, use them (avoids auth wall)
     # Still fall through to yt-dlp if scraping found nothing (e.g. private posts)

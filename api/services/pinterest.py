@@ -17,6 +17,7 @@ Fixes:
 import re
 import json
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 import requests as _requests
 from bs4 import BeautifulSoup as _BS
 import yt_dlp
@@ -38,6 +39,43 @@ def _format_size(filesize):
         return ''
     mb = filesize / (1024 * 1024)
     return f"{mb:.1f} MB" if mb >= 1 else f"{filesize / 1024:.0f} KB"
+
+
+def _test_url(url, timeout=5):
+    """HEAD-check a URL; return False if it returns 4xx/5xx or XML/HTML content."""
+    try:
+        r = _requests.head(
+            url,
+            headers={
+                'User-Agent': _UA_DESKTOP,
+                'Referer': 'https://www.pinterest.com/',
+            },
+            timeout=timeout,
+            allow_redirects=True,
+        )
+        if r.status_code >= 400:
+            return False
+        ct = r.headers.get('Content-Type', '').lower()
+        if 'xml' in ct or 'html' in ct or 'text/' in ct:
+            return False
+        return True
+    except Exception:
+        return False
+
+
+def _filter_working_links(links):
+    """Test all links in parallel and keep only those that return valid video."""
+    if not links:
+        return links
+
+    def _check(link):
+        return _test_url(link['url']), link
+
+    with ThreadPoolExecutor(max_workers=min(6, len(links))) as ex:
+        results = list(ex.map(_check, links))
+
+    working = [link for ok, link in results if ok]
+    return working
 
 
 def _resolve_short_url(url):
@@ -424,57 +462,64 @@ def extract_pinterest(url, cookie_file=None):
             links, title, thumbnail = result, 'Pinterest Video', ''
 
         if links:
-            # Sort by quality
-            links.sort(
-                key=lambda x: int(x['quality'].replace('p', '')) if x['quality'].endswith('p') else 0,
-                reverse=True,
-            )
-            return {
-                'success': True,
-                'title': title or 'Pinterest Video',
-                'thumbnail': thumbnail or '',
-                'links': links,
-                'platform': 'pinterest',
-            }
+            links = _filter_working_links(links)
+            if links:
+                links.sort(
+                    key=lambda x: int(x['quality'].replace('p', '')) if x['quality'].endswith('p') else 0,
+                    reverse=True,
+                )
+                return {
+                    'success': True,
+                    'title': title or 'Pinterest Video',
+                    'thumbnail': thumbnail or '',
+                    'links': links,
+                    'platform': 'pinterest',
+                }
     except Exception:
         pass
 
     # Strategy 2: direct page scraping
     links = _try_page_scrape(url)
     if links:
-        links.sort(
-            key=lambda x: int(x['quality'].replace('p', '')) if x['quality'].endswith('p') else 0,
-            reverse=True,
-        )
-        return {
-            'success': True,
-            'title': 'Pinterest Video',
-            'thumbnail': '',
-            'links': links,
-            'platform': 'pinterest',
-        }
+        links = _filter_working_links(links)
+        if links:
+            links.sort(
+                key=lambda x: int(x['quality'].replace('p', '')) if x['quality'].endswith('p') else 0,
+                reverse=True,
+            )
+            return {
+                'success': True,
+                'title': 'Pinterest Video',
+                'thumbnail': '',
+                'links': links,
+                'platform': 'pinterest',
+            }
 
     # Strategy 3: Pinterest v3 API
     links = _try_api_v3(url)
     if links:
-        return {
-            'success': True,
-            'title': 'Pinterest Video',
-            'thumbnail': '',
-            'links': links,
-            'platform': 'pinterest',
-        }
+        links = _filter_working_links(links)
+        if links:
+            return {
+                'success': True,
+                'title': 'Pinterest Video',
+                'thumbnail': '',
+                'links': links,
+                'platform': 'pinterest',
+            }
 
     # Strategy 4: savepin.app
     links = _try_savepin(url)
     if links:
-        return {
-            'success': True,
-            'title': 'Pinterest Video',
-            'thumbnail': '',
-            'links': links,
-            'platform': 'pinterest',
-        }
+        links = _filter_working_links(links)
+        if links:
+            return {
+                'success': True,
+                'title': 'Pinterest Video',
+                'thumbnail': '',
+                'links': links,
+                'platform': 'pinterest',
+            }
 
     return {
         'success': False,
