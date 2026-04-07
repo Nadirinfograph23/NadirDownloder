@@ -261,22 +261,6 @@ def _try_ytdlp(url, cookie_file=None):
             quality = q_m.group(1) if q_m else '720p'
             links.append({'url': f_url, 'quality': quality, 'format': 'mp4', 'size': ''})
 
-    # Derive quality variants from the direct mp4 URL base
-    if links:
-        base_url = links[0]['url']
-        # Extract base path: .../mc/720p/12/83/f0/<hash>.mp4
-        base_m = re.match(r'(https://[^/]*pinimg\.com/videos/mc)/\d+p/(.*\.mp4)', base_url)
-        if base_m:
-            cdn_prefix = base_m.group(1)
-            video_path = base_m.group(2)
-            seen_q = {links[0]['quality']}
-            for q_label, q_path in [('1080p', '1080p'), ('720p', '720p'), ('480p', '480p'), ('360p', '360p')]:
-                if q_label not in seen_q:
-                    variant_url = f'{cdn_prefix}/{q_path}/{video_path}'
-                    if variant_url not in seen:
-                        seen.add(variant_url)
-                        links.append({'url': variant_url, 'quality': q_label, 'format': 'mp4', 'size': ''})
-
     # Convert HLS formats to direct mp4 if we don't have direct URLs
     if not links:
         for f in formats:
