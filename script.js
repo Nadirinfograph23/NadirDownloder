@@ -480,11 +480,22 @@ function showResults(data, platform) {
 function _buildProxyUrl(link, platform, originalUrl, title) {
     var safeTitle = (title || 'video').replace(/[^\w\s\-]/g, '').trim().substring(0, 60) || 'video';
 
-    // Instagram: use dedicated /api/ig-download endpoint — fresh extraction +
-    // streaming with Content-Disposition: attachment on every request.
-    if (platform === 'instagram' && originalUrl) {
-        return '/api/ig-download'
-            + '?url=' + encodeURIComponent(originalUrl);
+    // Instagram: if link.url is already a CDN URL (from /api/instagram extraction)
+    // return it directly so the browser downloads straight from Instagram's CDN.
+    // Fall back to /api/ig-download (yt-dlp) only when link.url is a page URL.
+    if (platform === 'instagram') {
+        var isCdnUrl = link.url && (
+            link.url.indexOf('cdninstagram.com') !== -1 ||
+            link.url.indexOf('fbcdn.net') !== -1 ||
+            link.url.indexOf('fbsbx.com') !== -1
+        );
+        if (isCdnUrl) {
+            return link.url;
+        }
+        if (originalUrl) {
+            return '/api/ig-download?url=' + encodeURIComponent(originalUrl);
+        }
+        return link.url;
     }
 
     // These platforms re-extract at download time via yt-dlp (original page URL).
@@ -661,6 +672,48 @@ async function handleDownload() {
     showPreviewLoading(platform);
     showToast(t('toast_extracting') + PLATFORMS[platform].name + '...', PLATFORMS[platform].icon);
 
+    // ── Instagram: dedicated high-reliability endpoint ───────────────────────
+    if (platform === 'instagram') {
+        try {
+            var igResp = await fetch('/api/instagram', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url: url })
+            });
+            var igData = await igResp.json();
+
+            if (igData.success && igData.videoUrl) {
+                var igResult = {
+                    success: true,
+                    links: [{
+                        url: igData.videoUrl,
+                        quality: 'HD Video',
+                        format: 'mp4'
+                    }],
+                    thumbnail: igData.thumbnail || null,
+                    title: igData.title || 'Instagram Video',
+                    original_url: url,
+                    platform: 'instagram'
+                };
+                showResults(igResult, platform);
+                showToast(t('toast_ready'), 'fas fa-check');
+            } else if (igData.fallback) {
+                showError('Instagram blocked this request. Please try again in a moment.');
+                showToast(t('toast_failed'), 'fas fa-exclamation-circle');
+            } else {
+                showError(igData.error || t('error_extract'));
+                showToast(t('toast_failed'), 'fas fa-exclamation-circle');
+            }
+        } catch (err) {
+            showError(t('error_network'));
+            showToast(t('toast_network'), 'fas fa-wifi');
+        } finally {
+            setLoading(false);
+        }
+        return;
+    }
+
+    // ── All other platforms ──────────────────────────────────────────────────
     try {
         var response = await fetch('/api/download', {
             method: 'POST',
