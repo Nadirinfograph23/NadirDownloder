@@ -518,12 +518,18 @@ def _fetch_instagram_video(url):
 # ─────────────────────────────────────────────────────────────────────────────
 def _fb_unescape(u):
     """Unescape JSON-encoded characters in Facebook CDN URLs."""
-    return (
-        u.replace('\\u0026', '&')
-         .replace('\\u002F', '/')
-         .replace('\\/', '/')
-         .replace('&amp;', '&')
-    )
+    import urllib.parse as _urlparse
+    # Decode \uXXXX sequences Facebook embeds in HTML JSON
+    # Order matters: decode \u0025 (%) BEFORE others to avoid double-decode
+    u = u.replace('\\u0025', '%')
+    u = u.replace('\\u0026', '&')
+    u = u.replace('\\u002F', '/')
+    u = u.replace('\\/', '/')
+    u = u.replace('&amp;', '&')
+    # Handle double-percent-encoded sequences like %2525 → %25 → %
+    # Facebook sometimes double-encodes the = sign as %253D
+    u = _urlparse.unquote(u) if '%25' in u else u
+    return u
 
 
 def _facebook_direct_scrape(url):

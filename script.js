@@ -498,8 +498,9 @@ function _buildProxyUrl(link, platform, originalUrl, title) {
     var ytdlpPlatforms = ['tiktok', 'twitter', 'youtube', 'pinterest'];
 
     // These platforms stream the CDN URL server-side with proper headers.
-    // - facebook: fbcdn.net needs Referer header
-    var needsProxy = ['facebook'];
+    // Facebook used to need Referer, but fbcdn.net CDN now allows direct fetch
+    // with Access-Control-Allow-Origin: * — so browser can download directly.
+    var needsProxy = [];
 
     if (ytdlpPlatforms.indexOf(platform) !== -1 && originalUrl) {
         return '/api/proxy'
@@ -598,11 +599,16 @@ function handleLinkClick(index) {
 
     // For server-side streaming endpoints use fetch() to detect errors before they
     // reach the user as a corrupted file; for direct CDN links trigger immediately.
+    // Facebook CDN (fbcdn.net) has Access-Control-Allow-Origin: * so fetch() works directly.
     var isProxyDownload = (
         downloadUrl.indexOf('/api/proxy') !== -1 ||
         downloadUrl.indexOf('/api/ig-download') !== -1
     );
-    if (isProxyDownload) {
+    var isFbCdn = (
+        downloadUrl.indexOf('fbcdn.net') !== -1 ||
+        downloadUrl.indexOf('xx.fbcdn.net') !== -1
+    );
+    if (isProxyDownload || isFbCdn) {
         showToast(t('toast_downloading') || 'جاري التحميل...', 'fas fa-spinner fa-spin');
         _fetchAndDownload(downloadUrl, d.title, link.format || 'mp4', iconEl, btn);
     } else {
