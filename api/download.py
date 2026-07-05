@@ -733,18 +733,19 @@ def extract_video_info(url):
         return None
 
     # Facebook: fdown.net already gave us direct fbcdn.net CDN URLs.
-    if platform == 'facebook':
-        if scraped_links:
-            working = _filter_working_links(scraped_links, platform)
-            return {
-                'success': True,
-                'title': 'Facebook Video',
-                'thumbnail': '',
-                'links': working or scraped_links,
-                'original_url': url,
-                'platform': platform,
-            }
-        return {'success': False, 'error': 'Could not extract Facebook video. The video may be private or unavailable.'}
+    # If that scrape found nothing (e.g. share/v/ short links fdown.net can't
+    # resolve), fall through to the yt-dlp extraction chain below instead of
+    # failing immediately.
+    if platform == 'facebook' and scraped_links:
+        working = _filter_working_links(scraped_links, platform)
+        return {
+            'success': True,
+            'title': 'Facebook Video',
+            'thumbnail': '',
+            'links': working or scraped_links,
+            'original_url': url,
+            'platform': platform,
+        }
 
     # Pinterest: if direct scraping worked, filter and return immediately without yt-dlp
     if platform == 'pinterest' and scraped_links:
