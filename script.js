@@ -14,7 +14,7 @@ var TRANSLATIONS = {
         input_placeholder: 'Paste your video link here...',
         btn_download: 'Download',
         btn_downloading: 'Downloading...',
-        helper_text: 'Supports: Facebook, TikTok, YouTube, Instagram, Pinterest, X (Twitter)',
+        helper_text: 'Supports: Facebook, TikTok, YouTube, Pinterest, X (Twitter)',
         how_title: 'How it works',
         step1_title: '1. Copy the Link',
         step1_desc: 'Copy the video URL from your favorite social media platform',
@@ -25,7 +25,7 @@ var TRANSLATIONS = {
         footer_copy: '\u00A9 2025 NADIR DOWNLOADER. All rights reserved.',
         footer_dev: '\u062a\u0637\u0648\u064a\u0631 : ',
         toast_paste_link: 'Please paste a video link first',
-        toast_unsupported: 'Unsupported platform. Try Facebook, TikTok, YouTube, Instagram, Pinterest, or X',
+        toast_unsupported: 'Unsupported platform. Try Facebook, TikTok, YouTube, Pinterest, or X',
         toast_extracting: 'Extracting download links from ',
         toast_ready: 'Download links ready!',
         toast_downloading: 'Downloading, please wait...',
@@ -46,7 +46,7 @@ var TRANSLATIONS = {
         input_placeholder: '\u0627\u0644\u0635\u0642 \u0631\u0627\u0628\u0637 \u0627\u0644\u0641\u064a\u062f\u064a\u0648 \u0647\u0646\u0627...',
         btn_download: '\u062a\u062d\u0645\u064a\u0644',
         btn_downloading: '\u062c\u0627\u0631\u064a \u0627\u0644\u062a\u062d\u0645\u064a\u0644...',
-        helper_text: '\u064a\u062f\u0639\u0645: Facebook, TikTok, YouTube, Instagram, Pinterest, X (Twitter)',
+        helper_text: '\u064a\u062f\u0639\u0645: Facebook, TikTok, YouTube, Pinterest, X (Twitter)',
         how_title: '\u0643\u064a\u0641 \u064a\u0639\u0645\u0644',
         step1_title: '1. \u0627\u0646\u0633\u062e \u0627\u0644\u0631\u0627\u0628\u0637',
         step1_desc: '\u0627\u0646\u0633\u062e \u0631\u0627\u0628\u0637 \u0627\u0644\u0641\u064a\u062f\u064a\u0648 \u0645\u0646 \u0645\u0646\u0635\u0629 \u0627\u0644\u062a\u0648\u0627\u0635\u0644 \u0627\u0644\u0627\u062c\u062a\u0645\u0627\u0639\u064a \u0627\u0644\u0645\u0641\u0636\u0644\u0629 \u0644\u062f\u064a\u0643',
@@ -57,7 +57,7 @@ var TRANSLATIONS = {
         footer_copy: '\u00A9 2025 NADIR DOWNLOADER. \u062c\u0645\u064a\u0639 \u0627\u0644\u062d\u0642\u0648\u0642 \u0645\u062d\u0641\u0648\u0638\u0629.',
         footer_dev: '\u062a\u0637\u0648\u064a\u0631 : ',
         toast_paste_link: '\u0627\u0644\u0631\u062c\u0627\u0621 \u0644\u0635\u0642 \u0631\u0627\u0628\u0637 \u0627\u0644\u0641\u064a\u062f\u064a\u0648 \u0623\u0648\u0644\u0627\u064b',
-        toast_unsupported: '\u0645\u0646\u0635\u0629 \u063a\u064a\u0631 \u0645\u062f\u0639\u0648\u0645\u0629. \u062c\u0631\u0628 Facebook, TikTok, YouTube, Instagram, Pinterest, \u0623\u0648 X',
+        toast_unsupported: '\u0645\u0646\u0635\u0629 \u063a\u064a\u0631 \u0645\u062f\u0639\u0648\u0645\u0629. \u062c\u0631\u0628 Facebook, TikTok, YouTube, Pinterest, \u0623\u0648 X',
         toast_extracting: '\u062c\u0627\u0631\u064a \u0627\u0633\u062a\u062e\u0631\u0627\u062c \u0631\u0648\u0627\u0628\u0637 \u0627\u0644\u062a\u062d\u0645\u064a\u0644 \u0645\u0646 ',
         toast_ready: '\u0631\u0648\u0627\u0628\u0637 \u0627\u0644\u062a\u062d\u0645\u064a\u0644 \u062c\u0627\u0647\u0632\u0629!',
         toast_downloading: '\u062c\u0627\u0631\u064a \u0627\u0644\u062a\u062d\u0645\u064a\u0644\u060c \u064a\u0631\u062c\u0649 \u0627\u0644\u0627\u0646\u062a\u0638\u0627\u0631...',
@@ -78,7 +78,7 @@ var TRANSLATIONS = {
         input_placeholder: 'Collez le lien de la vid\u00e9o ici...',
         btn_download: 'T\u00e9l\u00e9charger',
         btn_downloading: 'T\u00e9l\u00e9chargement...',
-        helper_text: 'Supporte : Facebook, TikTok, YouTube, Instagram, Pinterest, X (Twitter)',
+        helper_text: 'Supporte : Facebook, TikTok, YouTube, Pinterest, X (Twitter)',
         how_title: 'Comment \u00e7a marche',
         step1_title: '1. Copiez le lien',
         step1_desc: 'Copiez l\u2019URL de la vid\u00e9o depuis votre r\u00e9seau social pr\u00e9f\u00e9r\u00e9',
@@ -89,7 +89,7 @@ var TRANSLATIONS = {
         footer_copy: '\u00A9 2025 NADIR DOWNLOADER. Tous droits r\u00e9serv\u00e9s.',
         footer_dev: 'D\u00e9veloppement : ',
         toast_paste_link: 'Veuillez d\u2019abord coller un lien vid\u00e9o',
-        toast_unsupported: 'Plateforme non support\u00e9e. Essayez Facebook, TikTok, YouTube, Instagram, Pinterest ou X',
+        toast_unsupported: 'Plateforme non support\u00e9e. Essayez Facebook, TikTok, YouTube, Pinterest ou X',
         toast_extracting: 'Extraction des liens depuis ',
         toast_ready: 'Liens de t\u00e9l\u00e9chargement pr\u00eats !',
         toast_downloading: 'T\u00e9l\u00e9chargement en cours, veuillez patienter...',
@@ -196,13 +196,6 @@ const PLATFORMS = {
         color: '#ff0000',
         glow: 'rgba(255, 0, 0, 0.3)',
         name: 'YouTube'
-    },
-    instagram: {
-        patterns: [/instagram\.com/, /instagr\.am/],
-        icon: 'fab fa-instagram',
-        color: '#e4405f',
-        glow: 'rgba(228, 64, 95, 0.3)',
-        name: 'Instagram'
     },
     pinterest: {
         patterns: [/pinterest\.com/, /pin\.it/],
@@ -417,7 +410,7 @@ function showResults(data, platform) {
 
     if (data.thumbnail) {
         var thumbSrc = data.thumbnail;
-        var thumbProxyPlatforms = ['instagram', 'tiktok', 'twitter', 'facebook', 'pinterest'];
+        var thumbProxyPlatforms = ['tiktok', 'twitter', 'facebook', 'pinterest'];
         if (thumbProxyPlatforms.indexOf(platform) !== -1) {
             thumbSrc = '/api/thumbnail?platform=' + encodeURIComponent(platform) + '&url=' + encodeURIComponent(data.thumbnail);
         }
@@ -582,7 +575,7 @@ function _fetchAndDownload(url, title, format, iconEl, btn) {
 
 // Platforms that use yt-dlp server-side (long-running) — use direct link download
 // to avoid buffering large files in JS memory; server returns a complete file.
-var _STREAMING_PLATFORMS = ['tiktok', 'instagram', 'twitter', 'youtube', 'pinterest'];
+var _STREAMING_PLATFORMS = ['tiktok', 'twitter', 'youtube', 'pinterest'];
 
 // Handle a download button click.
 function handleLinkClick(index) {
@@ -672,48 +665,7 @@ async function handleDownload() {
     showPreviewLoading(platform);
     showToast(t('toast_extracting') + PLATFORMS[platform].name + '...', PLATFORMS[platform].icon);
 
-    // ── Instagram: dedicated high-reliability endpoint ───────────────────────
-    if (platform === 'instagram') {
-        try {
-            var igResp = await fetch('/api/instagram', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ url: url })
-            });
-            var igData = await igResp.json();
-
-            if (igData.success && igData.videoUrl) {
-                var igResult = {
-                    success: true,
-                    links: [{
-                        url: igData.videoUrl,
-                        quality: 'HD Video',
-                        format: 'mp4'
-                    }],
-                    thumbnail: igData.thumbnail || null,
-                    title: igData.title || 'Instagram Video',
-                    original_url: url,
-                    platform: 'instagram'
-                };
-                showResults(igResult, platform);
-                showToast(t('toast_ready'), 'fas fa-check');
-            } else if (igData.fallback) {
-                showError('Instagram blocked this request. Please try again in a moment.');
-                showToast(t('toast_failed'), 'fas fa-exclamation-circle');
-            } else {
-                showError(igData.error || t('error_extract'));
-                showToast(t('toast_failed'), 'fas fa-exclamation-circle');
-            }
-        } catch (err) {
-            showError(t('error_network'));
-            showToast(t('toast_network'), 'fas fa-wifi');
-        } finally {
-            setLoading(false);
-        }
-        return;
-    }
-
-    // ── All other platforms ──────────────────────────────────────────────────
+    // ── All platforms (Instagram temporarily disabled — see note above) ──────
     try {
         var response = await fetch('/api/download', {
             method: 'POST',

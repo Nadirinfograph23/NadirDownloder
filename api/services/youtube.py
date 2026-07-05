@@ -13,6 +13,7 @@ Polling: up to 15 polls × 2s delay per quality (max ~30s per quality).
 
 import time
 import requests as _requests
+import yt_dlp
 
 _UA = (
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
@@ -188,9 +189,119 @@ def _fetch_ytdown(url):
     raise RuntimeError('All ytdown.to attempts exhausted')
 
 
+_YTDLP_RETRY_SETS = [
+    {
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['tv_embedded'],
+                'player_skip': ['configs', 'webpage'],
+            }
+        },
+    },
+    {
+        'http_headers': {
+            'User-Agent': (
+                'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) '
+                'AppleWebKit/605.1.15 (KHTML, like Gecko) '
+                'Version/17.0 Mobile/15E148 Safari/604.1'
+            )
+        },
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['ios', 'android_vr'],
+                'player_skip': ['configs'],
+            }
+        },
+    },
+    {'extractor_args': {'youtube': {'player_client': ['android_vr', 'web_safari']}}},
+    {},
+]
+
+
+def _fetch_ytdlp(url, cookie_file=None):
+    """
+    Fallback extractor using yt-dlp directly (used when ytdown.to is
+    unavailable / rate-limited / returns non-200).
+    """
+    base_opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'skip_download': True,
+        'noplaylist': True,
+        'socket_timeout': 25,
+        'extractor_retries': 2,
+        'age_limit': 99,
+    }
+    if cookie_file:
+        base_opts['cookiefile'] = cookie_file
+
+    last_exc = None
+    for retry_set in _YTDLP_RETRY_SETS:
+        try:
+            opts = {**base_opts, **retry_set}
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+            if not info:
+                continue
+
+            formats = info.get('formats') or []
+            links = []
+            seen_qualities = set()
+            # Prefer progressive (video+audio) mp4 formats, best first.
+            progressive = [
+                f for f in formats
+                if f.get('url') and f.get('vcodec') != 'none'
+                and f.get('acodec') != 'none' and f.get('ext') == 'mp4'
+            ]
+            progressive.sort(key=lambda f: f.get('height') or 0, reverse=True)
+            for f in progressive:
+                height = f.get('height')
+                quality = f'{height}p' if height else 'Best Quality'
+                if quality in seen_qualities:
+                    continue
+                seen_qualities.add(quality)
+                links.append({
+                    'url': f['url'],
+                    'quality': quality,
+                    'format': 'mp4',
+                    'size': _format_bytes(f.get('filesize') or f.get('filesize_approx')),
+                })
+                if len(links) >= 4:
+                    break
+
+            if not links and info.get('url'):
+                height = info.get('height')
+                links.append({
+                    'url': info['url'],
+                    'quality': f'{height}p' if height else 'Best Quality',
+                    'format': 'mp4',
+                    'size': '',
+                })
+
+            if links:
+                return info.get('title') or 'YouTube Video', info.get('thumbnail') or '', links
+        except Exception as e:
+            last_exc = e
+            continue
+
+    if last_exc:
+        raise RuntimeError(str(last_exc))
+    raise RuntimeError('yt-dlp could not extract any formats')
+
+
+def _format_bytes(num_bytes):
+    if not num_bytes:
+        return ''
+    mb = num_bytes / (1024 * 1024)
+    return f"{mb:.1f} MB" if mb >= 1 else f"{num_bytes / 1024:.0f} KB"
+
+
 def extract_youtube(url, cookie_file=None):
     """
     Main entry point. Returns a dict with success/title/thumbnail/links.
+
+    Tries ytdown.to first (no yt-dlp signature/PO-token issues), then
+    falls back to yt-dlp directly if ytdown.to is down/blocked.
     """
     try:
         title, thumbnail, links = _fetch_ytdown(url)
@@ -205,8 +316,21 @@ def extract_youtube(url, cookie_file=None):
         msg = str(e).lower()
         if 'unavailable' in msg or 'private' in msg:
             return {'success': False, 'error': 'This video is private or unavailable.'}
-        if 'maintenance' in msg:
-            return {'success': False, 'error': 'YouTube downloader is temporarily under maintenance. Please try again later.'}
-        return {'success': False, 'error': f'Could not extract YouTube video. {e}'}
+    except Exception:
+        pass
+
+    # ── Fallback: yt-dlp direct extraction ──────────────────────────────────
+    try:
+        title, thumbnail, links = _fetch_ytdlp(url, cookie_file)
+        return {
+            'success': True,
+            'title': title,
+            'thumbnail': thumbnail,
+            'platform': 'youtube',
+            'links': links,
+        }
     except Exception as e:
-        return {'success': False, 'error': f'Unexpected error: {e}'}
+        msg = str(e).lower()
+        if 'unavailable' in msg or 'private' in msg:
+            return {'success': False, 'error': 'This video is private or unavailable.'}
+        return {'success': False, 'error': f'Could not extract YouTube video. {e}'}
