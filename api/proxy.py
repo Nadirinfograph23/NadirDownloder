@@ -260,6 +260,13 @@ class handler(BaseHTTPRequestHandler):
             self._handle_ytdlp_download(video_url, platform, format_id, filename, fmt)
             return
 
+        # Facebook: CDN has Access-Control-Allow-Origin: * so the browser can fetch
+        # directly. The proxy just validates the URL and returns a 302 redirect —
+        # no streaming needed, avoids Vercel's 60s timeout for large files.
+        if platform == 'facebook':
+            self._handle_facebook_redirect(video_url, filename, fmt)
+            return
+
         config = PLATFORM_CONFIG[platform]
 
         try:
@@ -326,6 +333,25 @@ class handler(BaseHTTPRequestHandler):
             self.wfile.write(chunk)
 
         resp.close()
+
+    def _handle_facebook_redirect(self, video_url, filename, fmt):
+        """
+        For Facebook CDN URLs: validate and return a 302 redirect.
+        The browser's fetch() follows the redirect and downloads directly
+        from the CDN (which has Access-Control-Allow-Origin: *), so the
+        JS blob approach works without any server-side streaming.
+        This completely avoids Vercel's 60s function timeout.
+        """
+        if not _is_url_allowed(video_url, 'facebook'):
+            self._send_error(403, 'URL domain not allowed for facebook')
+            return
+
+        self.send_response(302)
+        self.send_header('Location', video_url)
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Expose-Headers', 'Location')
+        self.send_header('Cache-Control', 'no-store')
+        self.end_headers()
 
     def _handle_ytdlp_download(self, video_url, platform, format_id, filename, fmt):
         """Re-extract and download via yt-dlp at download time for fresh CDN URLs."""

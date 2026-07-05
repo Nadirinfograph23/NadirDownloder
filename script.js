@@ -497,10 +497,11 @@ function _buildProxyUrl(link, platform, originalUrl, title) {
     // - pinterest: CDN pinimg.com URLs return 403; must re-extract with yt-dlp
     var ytdlpPlatforms = ['tiktok', 'twitter', 'youtube', 'pinterest'];
 
-    // These platforms stream the CDN URL server-side with proper headers.
-    // Facebook used to need Referer, but fbcdn.net CDN now allows direct fetch
-    // with Access-Control-Allow-Origin: * — so browser can download directly.
-    var needsProxy = [];
+    // These platforms route CDN URLs through /api/proxy.
+    // Facebook: proxy validates the URL and returns 302 redirect to fbcdn.net CDN.
+    // The browser's fetch() follows the redirect and downloads directly from CDN
+    // (which has Access-Control-Allow-Origin: *). No server-side streaming needed.
+    var needsProxy = ['facebook'];
 
     if (ytdlpPlatforms.indexOf(platform) !== -1 && originalUrl) {
         return '/api/proxy'

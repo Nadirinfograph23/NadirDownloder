@@ -661,17 +661,94 @@ def _facebook_fdown_fallback(url):
     return links[:4]
 
 
+def _facebook_ytdlp(url):
+    """
+    Strategy 0 (primary): Use yt-dlp to extract Facebook video URLs.
+    More reliable than page scraping for Reels, Stories, and various URL formats.
+    Returns list of {url, quality, format, size} dicts.
+    """
+    opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'skip_download': True,
+        'noplaylist': True,
+        'socket_timeout': 20,
+        'extractor_retries': 2,
+    }
+    cf = _cookie_file('facebook')
+    if cf:
+        opts['cookiefile'] = cf
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            if not info:
+                return []
+            fmts = info.get('formats', [])
+            title = info.get('title', 'Facebook Video')
+            thumbnail = info.get('thumbnail', '')
+
+            # Collect mp4 formats with height info
+            links = []
+            seen_heights = set()
+            # Sort by height descending so we get HD first
+            mp4_fmts = [f for f in fmts if f.get('ext') == 'mp4' and f.get('url') and 'fbcdn.net' in f.get('url', '')]
+            mp4_fmts.sort(key=lambda f: f.get('height', 0) or 0, reverse=True)
+
+            for f in mp4_fmts:
+                h = f.get('height', 0) or 0
+                if h in seen_heights:
+                    continue
+                seen_heights.add(h)
+                if h >= 480:
+                    quality = 'HD'
+                elif h > 0:
+                    quality = 'SD'
+                else:
+                    quality = 'HD' if not links else 'SD'
+                links.append({
+                    'url': f['url'],
+                    'quality': quality,
+                    'format': 'mp4',
+                    'size': _format_size(f.get('filesize') or f.get('filesize_approx')),
+                })
+                if len(links) >= 2:
+                    break
+
+            # If no typed mp4 formats, try the merged/best URL
+            if not links:
+                best_url = info.get('url', '')
+                if best_url and 'fbcdn.net' in best_url:
+                    links.append({'url': best_url, 'quality': 'HD', 'format': 'mp4', 'size': ''})
+
+            return links, title, thumbnail
+    except Exception:
+        return [], '', ''
+
+
 def _fetch_facebook_video(url):
     """
     Multi-strategy Facebook video extractor.
 
-    1. Direct page scraping (SnapSave-style) — fastest, no dependency.
-    2. fdown.net fallback — for login-gated or tricky URLs.
+    0. yt-dlp  — primary, handles Reels/Stories/all URL formats.
+    1. Direct page scraping (SnapSave-style) — fast fallback.
+    2. fdown.net — last resort for login-gated URLs.
     """
+    # Strategy 0: yt-dlp
+    try:
+        links, title, thumbnail = _facebook_ytdlp(url)
+        if links:
+            return links, title, thumbnail
+    except Exception:
+        pass
+
+    # Strategy 1: direct page scrape
     links = _facebook_direct_scrape(url)
     if links:
-        return links
-    return _facebook_fdown_fallback(url)
+        return links, 'Facebook Video', ''
+
+    # Strategy 2: fdown.net
+    links = _facebook_fdown_fallback(url)
+    return links, 'Facebook Video', ''
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -694,8 +771,11 @@ def extract_video_info(url):
     # ─────────────────────────────────────────────────────────────────────────
 
     scraped_links = []
+    scraped_title = ''
+    scraped_thumbnail = ''
     if platform == 'facebook':
-        scraped_links = _fetch_facebook_video(url)
+        result = _fetch_facebook_video(url)
+        scraped_links, scraped_title, scraped_thumbnail = result if isinstance(result, tuple) else (result, '', '')
 
     _UA_DESKTOP = (
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
@@ -885,7 +965,9 @@ def extract_video_info(url):
         if not info:
             if scraped_links:
                 return {
-                    'success': True, 'title': 'Video', 'thumbnail': '',
+                    'success': True,
+                    'title': scraped_title or 'Video',
+                    'thumbnail': scraped_thumbnail or '',
                     'links': scraped_links, 'original_url': url,
                     'platform': platform,
                 }
@@ -899,8 +981,8 @@ def extract_video_info(url):
         if scraped_links:
             result = {
                 'success': True,
-                'title': title,
-                'thumbnail': thumbnail,
+                'title': scraped_title or title,
+                'thumbnail': scraped_thumbnail or thumbnail,
                 'links': scraped_links[:6],
                 'original_url': url,
                 'platform': platform,
