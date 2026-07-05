@@ -52,6 +52,8 @@ PLATFORM_CONFIG = {
     'facebook': {
         'domain_patterns': [
             r'(^|\.)fbcdn\.net$',
+            r'(^|\.)xx\.fbcdn\.net$',
+            r'video-[a-z0-9\-]+\.xx\.fbcdn\.net$',
             r'(^|\.)facebook\.com$',
             r'(^|\.)fbcdn\.com$',
             r'(^|\.)fb\.com$',

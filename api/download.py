@@ -514,9 +514,95 @@ def _fetch_instagram_video(url):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Facebook Scraper
+# Facebook Scraper — SnapSave-style direct page extraction
 # ─────────────────────────────────────────────────────────────────────────────
-def _fetch_facebook_video(url):
+def _fb_unescape(u):
+    """Unescape JSON-encoded characters in Facebook CDN URLs."""
+    return (
+        u.replace('\\u0026', '&')
+         .replace('\\u002F', '/')
+         .replace('\\/', '/')
+         .replace('&amp;', '&')
+    )
+
+
+def _facebook_direct_scrape(url):
+    """
+    Primary strategy (SnapSave-style):
+    Fetch the Facebook video page directly and extract the CDN URLs that
+    Facebook embeds in the page JSON — no third-party service needed.
+
+    Keys extracted in priority order:
+      browser_native_hd_url  → HD quality
+      browser_native_sd_url  → SD quality
+      playable_url_quality_hd → HD (older pages)
+      playable_url            → SD (older pages)
+      hd_src / sd_src         → legacy keys
+    """
+    _KEY_QUALITY = [
+        ('browser_native_hd_url',    'HD'),
+        ('browser_native_sd_url',    'SD'),
+        ('playable_url_quality_hd',  'HD'),
+        ('playable_url',             'SD'),
+        ('hd_src',                   'HD'),
+        ('sd_src',                   'SD'),
+    ]
+
+    session = _requests.Session()
+    headers = {
+        'User-Agent': _BROWSER_UA,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Upgrade-Insecure-Requests': '1',
+    }
+
+    try:
+        resp = session.get(url, headers=headers, timeout=20, allow_redirects=True)
+        if resp.status_code != 200:
+            return []
+        html = resp.text
+    except Exception:
+        return []
+
+    links = []
+    seen = set()
+
+    for key, quality in _KEY_QUALITY:
+        # Match both escaped and unescaped JSON values
+        pattern = r'"' + re.escape(key) + r'"\s*:\s*"([^"]+)"'
+        for m in re.finditer(pattern, html):
+            raw = m.group(1)
+            video_url = _fb_unescape(raw)
+            if (video_url
+                    and video_url not in seen
+                    and video_url.startswith('http')
+                    and ('fbcdn' in video_url or 'facebook' in video_url)):
+                seen.add(video_url)
+                links.append({
+                    'url': video_url,
+                    'quality': quality,
+                    'format': 'mp4',
+                    'size': '',
+                })
+
+    # De-duplicate: keep only first occurrence of each quality level
+    seen_quality = set()
+    deduped = []
+    for link in links:
+        if link['quality'] not in seen_quality:
+            seen_quality.add(link['quality'])
+            deduped.append(link)
+
+    return deduped[:4]
+
+
+def _facebook_fdown_fallback(url):
+    """
+    Fallback strategy: use fdown.net (similar approach to SnapSave).
+    Only used when direct scraping returns nothing (e.g. login-gated videos).
+    """
     session = _requests.Session()
     base_headers = {
         'User-Agent': _BROWSER_UA,
@@ -549,24 +635,37 @@ def _fetch_facebook_video(url):
     seen = set()
     for a in soup.find_all('a', href=True):
         href = a.get('href', '')
-        text = a.get_text(separator=' ').strip()
+        text = a.get_text(separator=' ').strip().upper()
         if not href or href in seen:
             continue
-        text_upper = text.upper()
-        is_sd = 'NORMAL' in text_upper or ('DOWNLOAD' in text_upper and 'QUALITY' in text_upper and 'HD' not in text_upper)
-        is_hd = 'HD' in text_upper and 'DOWNLOAD' in text_upper
-        if (is_sd or is_hd) and ('fbcdn' in href or 'facebook' in href or href.startswith('https://')):
+        is_hd = 'HD' in text and 'DOWNLOAD' in text
+        is_sd = 'NORMAL' in text or ('DOWNLOAD' in text and 'HD' not in text)
+        if (is_hd or is_sd) and ('fbcdn' in href or href.startswith('https://')):
             seen.add(href)
-            quality = 'HD' if is_hd else 'SD'
-            links.append({'url': href, 'quality': quality, 'format': 'mp4', 'size': ''})
+            links.append({'url': href, 'quality': 'HD' if is_hd else 'SD',
+                          'format': 'mp4', 'size': ''})
     if not links:
         for a in soup.find_all('a', href=True):
             href = a.get('href', '')
             if 'fbcdn' in href and href not in seen:
                 seen.add(href)
-                quality = 'HD' if 'hd' in href.lower() else 'SD'
-                links.append({'url': href, 'quality': quality, 'format': 'mp4', 'size': ''})
+                links.append({'url': href,
+                              'quality': 'HD' if 'hd' in href.lower() else 'SD',
+                              'format': 'mp4', 'size': ''})
     return links[:4]
+
+
+def _fetch_facebook_video(url):
+    """
+    Multi-strategy Facebook video extractor.
+
+    1. Direct page scraping (SnapSave-style) — fastest, no dependency.
+    2. fdown.net fallback — for login-gated or tricky URLs.
+    """
+    links = _facebook_direct_scrape(url)
+    if links:
+        return links
+    return _facebook_fdown_fallback(url)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
